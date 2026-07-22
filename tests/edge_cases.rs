@@ -368,7 +368,10 @@ async fn committed_git_symlink_mode_is_returned_as_symlink_content() {
         ],
     );
     git(repo.path(), &["commit", "-m", "symlink mode"]);
-    git(repo.path(), &["switch", "main"]);
+    // On Windows with core.symlinks=false, the index-only 120000 entry leaves
+    // the regular worktree file looking modified. This fixture is disposable,
+    // so discard that representation before changing branches.
+    git(repo.path(), &["switch", "--discard-changes", "main"]);
     let registry = RepositoryRegistry::system();
     let snapshot = registry.open_repository(repo.path()).await.unwrap();
     let main = snapshot

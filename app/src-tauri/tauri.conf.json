@@ -1,0 +1,50 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Branch Review",
+  "version": "0.1.2",
+  "identifier": "dev.branchreview.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{
+      "title": "Branch Review",
+      "width": 1440,
+      "height": 900,
+      "minWidth": 1024,
+      "minHeight": 680,
+      "resizable": true,
+      "maximized": true,
+      "fullscreen": false,
+      "decorations": true,
+      "theme": "Dark",
+      "backgroundColor": "#0d0f12"
+    }],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' asset: data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src ipc: http://ipc.localhost; worker-src 'self' blob:; script-src 'self' 'wasm-unsafe-eval'",
+      "capabilities": ["main-capability"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
+    "shortDescription": "Read-only local Git comparison",
+    "longDescription": "Review branches and working tree changes across local Git repositories without modifying them."
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEMxMTQyMzg1MTRGNzBCQjUKUldTMUMvY1VoU01Vd2J0TGdtbUZRSHFscGt3MEIwN3ptNy9lMExYRVlHS0EzV1ZzV0o0VGJQVGMK",
+      "endpoints": [
+        "https://github.com/Adamulek123/Branch-Review/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

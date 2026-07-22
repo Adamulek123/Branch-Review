@@ -1,0 +1,11 @@
+/target
+/app/node_modules
+/app/dist
+/app/src-tauri/target
+/app/.vite
+/app/coverage
+/app/test-results
+/app/wdio-logs
+/app/.wdio-data
+/app/test-logs
+*.tmp

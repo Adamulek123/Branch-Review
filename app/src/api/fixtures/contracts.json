@@ -1,0 +1,59 @@
+{
+  "comparison_requests": [
+    { "mode": "direct", "left": "ref-left", "right": "ref-right" },
+    { "mode": "since_merge_base", "left": "ref-left", "right": "ref-right" },
+    { "mode": "unstaged" },
+    { "mode": "staged" },
+    { "mode": "all_uncommitted" }
+  ],
+  "file_contents": [
+    { "kind": "text", "text": "fn main() {}\n", "encoding": "utf-8", "size": 13 },
+    { "kind": "binary", "size": 8 },
+    { "kind": "too_large", "size": 6000000, "limit": 5242880 },
+    { "kind": "missing" },
+    { "kind": "symlink", "target": "../shared/config" },
+    { "kind": "submodule", "commit_oid": null },
+    { "kind": "unsupported_encoding", "size": 24 }
+  ],
+  "file_sources": [
+    { "kind": "commit", "commit_oid": "1111111111111111111111111111111111111111" },
+    { "kind": "index" },
+    { "kind": "worktree" },
+    { "kind": "empty" },
+    { "kind": "conflict_stage", "stage": 2 },
+    { "kind": "submodule" }
+  ],
+  "head_states": [
+    { "kind": "branch", "full_ref": "refs/heads/main", "commit_oid": "1111111111111111111111111111111111111111" },
+    { "kind": "detached", "commit_oid": "1111111111111111111111111111111111111111" },
+    { "kind": "unborn", "full_ref": null }
+  ],
+  "snapshot": {
+    "repo_id": "repo-1",
+    "generation": 4,
+    "info": {
+      "id": "repo-1", "display_name": "fixture", "worktree_root": "C:/fixture", "git_dir": "C:/fixture/.git",
+      "git_common_dir": "C:/fixture/.git", "is_shallow": false, "object_format": "sha1",
+      "head": { "kind": "branch", "full_ref": "refs/heads/main", "commit_oid": "1111111111111111111111111111111111111111" }, "generation": 4
+    },
+    "head": { "kind": "branch", "full_ref": "refs/heads/main", "commit_oid": "1111111111111111111111111111111111111111" },
+    "references": [{ "id": "ref-left", "full_name": "refs/heads/main", "display_name": "main", "kind": "local_branch", "commit_oid": "1111111111111111111111111111111111111111", "upstream_full_name": null, "is_head": true, "checked_out_worktree": "C:/fixture" }],
+    "status": { "generation": 4, "branch_oid": "1111111111111111111111111111111111111111", "branch_head": "main", "entries": [] }
+  },
+  "comparison": {
+    "comparison_id": "comparison-1", "repo_id": "repo-1", "generation": 4, "mode": "all_uncommitted",
+    "resolved_left": null, "resolved_right": null,
+    "files": [{ "file_id": "file-1", "display_path": "src/main.rs", "old_display_path": null, "status": "modified", "staged": false, "unstaged": true, "conflicted": false, "submodule": false, "similarity": null }],
+    "totals": { "files": 1, "added": 0, "modified": 1, "deleted": 0, "renamed": 0, "conflicted": 0 }
+  },
+  "file_comparison": {
+    "repo_id": "repo-1", "comparison_id": "comparison-1", "file_id": "file-1", "generation": 4,
+    "left": { "label": "HEAD", "source": { "kind": "commit", "commit_oid": "1111111111111111111111111111111111111111" }, "content": { "kind": "text", "text": "old\n", "encoding": "utf-8", "size": 4 } },
+    "right": { "label": "Worktree", "source": { "kind": "worktree" }, "content": { "kind": "text", "text": "new\n", "encoding": "utf-8", "size": 4 } }
+  },
+  "project": {
+    "schema_version": 1, "project_id": "project-1", "name": "Fixture project", "layout": "tabs",
+    "repositories": [{ "project_repo_id": "fixture-repo", "display_name": "Fixture", "path": "C:/fixture", "display_order": 0, "default_comparison": { "mode": "direct", "left_full_ref": "refs/heads/main", "right_full_ref": null } }]
+  },
+  "error": { "code": "GIT_COMMAND_FAILED", "message": "Git could not complete the requested read-only operation", "retryable": false, "repo_id": "repo-1", "operation_id": null }
+}

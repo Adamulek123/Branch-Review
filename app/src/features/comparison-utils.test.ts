@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createComparisonRequest, filterFiles, formatBytes } from "./comparison-utils";
+import { createComparisonRequest, filterFiles, findUpstreamComparison, formatBytes } from "./comparison-utils";
 import type { ChangedFile, GitReference, RefId } from "../api/types";
 
 const references = [
@@ -19,4 +19,15 @@ describe("comparison utilities", () => {
     expect(filterFiles(files, "", ["added"])).toHaveLength(0);
   });
   it("formats bounded content sizes", () => expect(formatBytes(5242880)).toBe("5.0 MB"));
+  it("resolves only the checked-out branch's cached upstream", () => {
+    const withUpstream = [
+      { ...references[0], upstream_full_name: "refs/remotes/origin/main" },
+      { id: "origin-main" as RefId, full_name: "refs/remotes/origin/main", display_name: "origin/main", kind: "remote_branch", commit_oid: "0", upstream_full_name: null, is_head: false, checked_out_worktree: null },
+      references[1],
+    ] satisfies GitReference[];
+
+    expect(findUpstreamComparison(withUpstream)).toEqual({ local: withUpstream[0], upstream: withUpstream[1] });
+    expect(findUpstreamComparison(references)).toBeNull();
+    expect(findUpstreamComparison([{ ...withUpstream[0], upstream_full_name: "refs/remotes/origin/missing" }])).toBeNull();
+  });
 });

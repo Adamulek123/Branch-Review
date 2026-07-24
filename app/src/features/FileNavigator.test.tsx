@@ -19,7 +19,7 @@ const files = [
 describe("FileNavigator keyboard behavior", () => {
   it("moves with arrows or J/K and opens the active item with Enter", () => {
     const onSelect = vi.fn();
-    render(<FileNavigator files={files} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} onSearch={vi.fn()} onToggleStatus={vi.fn()} onSelect={onSelect} />);
+    render(<FileNavigator files={files} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={onSelect} />);
     const list = screen.getByLabelText("Changed file list");
 
     fireEvent.keyDown(list, { key: "ArrowDown" });

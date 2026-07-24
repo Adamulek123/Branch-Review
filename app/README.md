@@ -17,21 +17,41 @@ Use pnpm 11.9.0. The global npm installation is not required.
 
 ```text
 pnpm install
-pnpm tauri dev
+pnpm inspect
 ```
+
+`pnpm inspect` creates a disposable Git repository with committed, modified, and
+untracked files, then opens the real Tauri application against it. The fixture
+and project configuration live under the ignored `app/.wdio-data/` directory,
+so this mode never reads or overwrites your normal saved projects. Frontend
+changes hot-reload while the window is open.
+
+Use `pnpm tauri dev` instead when you intentionally want to run against your
+normal local Branch Review configuration.
 
 The desktop window has a 1024×680 minimum. The repository and file pane sizes are stored as disposable local preferences. Saved project membership and comparison defaults are written by the Rust project store.
 
 ## Tests
 
 ```text
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm test:e2e
+pnpm test:watch
+pnpm check:local
+pnpm check:full
+pnpm test:visual
 ```
 
-`pnpm test` runs contract, lifecycle, state, component, accessibility, content-renderer, and mocked IPC renderer tests. `pnpm test:e2e` also builds a debug Tauri executable, creates an isolated real Git repository, and drives the native Windows WebView2 application with WebdriverIO. On a clean machine, the WebDriver service may install `tauri-driver` and download a matching Edge driver on its first run. The ignored `.wdio-data/` directory keeps test projects and repositories separate from personal Branch Review data.
+`pnpm test:watch` is the tight frontend feedback loop. `pnpm check:local`
+matches the automated release checks: type checking, lint, renderer tests, the
+Rust workspace, and the Tauri command layer. `pnpm check:full` adds mocked
+end-to-end coverage and the native desktop smoke test.
+
+`pnpm test:visual` builds the debug desktop executable, creates the same
+isolated repository used by `pnpm inspect`, drives the native Windows WebView2
+application, and writes a screenshot to
+`app/test-results/desktop-smoke.png`. Open that file after the run to inspect
+the rendered result or compare it with a previous run. On a clean machine, the
+WebDriver service may install `tauri-driver` and download a matching Edge
+driver on its first run.
 
 ## Packaging
 

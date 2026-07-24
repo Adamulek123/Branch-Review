@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { AlertTriangle, Braces, Command, FolderGit2, FolderPlus, HelpCircle, LoaderCircle, PanelLeft, Plus, Settings2 } from "lucide-react";
+import { AlertTriangle, Braces, Command, FolderGit2, FolderPlus, HelpCircle, LoaderCircle, PanelLeft, Plus, Settings2, ShieldCheck } from "lucide-react";
 import { backend, normalizeError } from "../api/backend";
 import { listenForRepositoryUpdates } from "../api/events";
 import { generations } from "../api/generations";
@@ -21,7 +21,7 @@ import { RepositorySidebar, type RepositoryView } from "../features/RepositorySi
 import { StatusBar } from "../features/StatusBar";
 import { UpdateDialog } from "../features/UpdateDialog";
 import { CommandPalette, ShortcutHelp, commandIcons, type CommandAction } from "../features/CommandPalette";
-import { createComparisonRequest, filterFiles } from "../features/comparison-utils";
+import { createComparisonRequest, filterFiles, findUpstreamComparison } from "../features/comparison-utils";
 import { useUpdater } from "./use-updater";
 
 const runtimeKey = (projectId: string, projectRepoId: string) => `${projectId}:${projectRepoId}`;
@@ -322,6 +322,14 @@ export default function App() {
     }
   }, [activeProject, closeRuntimeRepository, dispatch]);
 
+  const visibleFiles = useMemo(() => comparison ? filterFiles(comparison.files, ui.search, ui.statusFilters) : [], [comparison, ui.search, ui.statusFilters]);
+  const selectFileAt = useCallback((index: number) => {
+    const file = visibleFiles[index];
+    if (!file) return;
+    selectedPathRef.current = file.display_path;
+    dispatch({ type: "selectFile", fileId: file.file_id });
+  }, [dispatch, visibleFiles]);
+
   const commandActions: CommandAction[] = useMemo(() => [
     { id: "add", label: "Add local repository", shortcut: "Ctrl O", icon: commandIcons.add, run: () => void addRepository() },
     { id: "refresh", label: "Refresh active repository", shortcut: "Ctrl R", icon: commandIcons.refresh, run: () => activeRuntime?.repoId && void refreshRepository(activeRuntime.repoId) },
@@ -329,6 +337,7 @@ export default function App() {
     { id: "split", label: "Use split diff", icon: commandIcons.split, run: () => dispatch({ type: "setDiffView", view: "split" }) },
     { id: "unified", label: "Use unified diff", icon: commandIcons.unified, run: () => dispatch({ type: "setDiffView", view: "unified" }) },
     { id: "sidebar", label: "Toggle repository pane", icon: commandIcons.sidebar, run: () => dispatch({ type: "toggleRepositoryPane" }) },
+    { id: "files", label: "Toggle changed-file pane", icon: commandIcons.sidebar, run: () => dispatch({ type: "toggleFilePane" }) },
     { id: "help", label: "Show keyboard shortcuts", shortcut: "?", icon: commandIcons.help, run: () => dispatch({ type: "setShortcutHelp", open: true }) },
   ], [activeRuntime?.repoId, addRepository, dispatch, refreshRepository]);
 
@@ -340,6 +349,11 @@ export default function App() {
       if (modifier && event.key.toLowerCase() === "f") { event.preventDefault(); window.dispatchEvent(new Event("branch-review:focus-filter")); }
       if (modifier && event.key.toLowerCase() === "r") { event.preventDefault(); if (activeRuntime?.repoId) void refreshRepository(activeRuntime.repoId); }
       if (event.shiftKey && event.key.toLowerCase() === "d") { event.preventDefault(); dispatch({ type: "setDiffView", view: ui.diffView === "split" ? "unified" : "split" }); }
+      if (event.shiftKey && (event.key.toLowerCase() === "j" || event.key.toLowerCase() === "k") && !(event.target instanceof HTMLInputElement)) {
+        event.preventDefault();
+        const index = visibleFiles.findIndex((file) => file.file_id === ui.activeFileId);
+        selectFileAt(Math.max(0, Math.min(visibleFiles.length - 1, index + (event.key.toLowerCase() === "j" ? 1 : -1))));
+      }
       if (event.key === "?" && !(event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement)) dispatch({ type: "setShortcutHelp", open: true });
       if (event.altKey && (event.key === "ArrowDown" || event.key === "ArrowUp") && activeProject) {
         event.preventDefault();
@@ -351,14 +365,13 @@ export default function App() {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [activeProject, activeRuntime?.repoId, addRepository, dispatch, refreshRepository, ui.activeProjectRepoId, ui.diffView]);
+  }, [activeProject, activeRuntime?.repoId, addRepository, dispatch, refreshRepository, selectFileAt, ui.activeFileId, ui.activeProjectRepoId, ui.diffView, visibleFiles]);
 
   if (capabilitiesQuery.isLoading || projectsQuery.isLoading) return <StartupState />;
   if (capabilitiesQuery.error) return <SetupFailure error={normalizeError(capabilitiesQuery.error)} retry={() => void capabilitiesQuery.refetch()} />;
   if (projectsQuery.error) return <SetupFailure error={normalizeError(projectsQuery.error)} retry={() => void projectsQuery.refetch()} />;
 
   const currentError = activeRuntime?.error ?? (snapshotQuery.error ? normalizeError(snapshotQuery.error) : null);
-  const visibleFiles = comparison ? filterFiles(comparison.files, ui.search, ui.statusFilters) : [];
   const createProject = async (name: string) => {
     try {
       setOperationError(null);
@@ -387,13 +400,36 @@ export default function App() {
       setDeleteProjectOpen(false);
     } catch (error) { setOperationError(normalizeError(error)); }
   };
+  const upstreamComparison = snapshot ? findUpstreamComparison(snapshot.references) : null;
+  const selectedVisibleIndex = visibleFiles.findIndex((file) => file.file_id === ui.activeFileId);
+  const diffViewer = (
+    <DiffViewer
+      comparison={fileQuery.data ?? null}
+      file={selectedFile}
+      view={ui.diffView}
+      loading={fileQuery.isLoading || fileQuery.isFetching}
+      wrapLines={ui.wrapLines}
+      ignoreTrimWhitespace={ui.ignoreTrimWhitespace}
+      collapseUnchanged={ui.collapseUnchanged}
+      filePaneCollapsed={ui.filePaneCollapsed}
+      hasPrevious={selectedVisibleIndex > 0}
+      hasNext={selectedVisibleIndex >= 0 && selectedVisibleIndex < visibleFiles.length - 1}
+      onView={(view) => dispatch({ type: "setDiffView", view })}
+      onWrapLines={(enabled) => dispatch({ type: "setWrapLines", enabled })}
+      onIgnoreTrimWhitespace={(enabled) => dispatch({ type: "setIgnoreTrimWhitespace", enabled })}
+      onCollapseUnchanged={(enabled) => dispatch({ type: "setCollapseUnchanged", enabled })}
+      onToggleFilePane={() => dispatch({ type: "toggleFilePane" })}
+      onPreviousFile={() => selectFileAt(selectedVisibleIndex - 1)}
+      onNextFile={() => selectFileAt(selectedVisibleIndex + 1)}
+    />
+  );
 
   return (
     <div className="app-shell">
       <header className="title-bar">
-        <div className="brand-mark"><Braces size={15} /><span>Branch Review</span></div>
-        <div className="title-bar__context">{activeProject ? <><strong>{activeProject.name}</strong><span>/</span><span>{snapshot?.info.display_name ?? repositoryViews.find((item) => item.definition.project_repo_id === ui.activeProjectRepoId)?.definition.display_name ?? "No repository"}</span></> : <span>No project selected</span>}</div>
-        <button className="command-trigger" onClick={() => dispatch({ type: "setCommandPalette", open: true })}><Command size={14} /><span>Commands</span><kbd>⌘K</kbd></button>
+        <div className="brand-mark"><span className="brand-mark__icon"><Braces size={15} /></span><span>Branch Review</span></div>
+        <div className="title-bar__context">{activeProject ? <><strong>{activeProject.name}</strong><ChevronSeparator /><span>{snapshot?.info.display_name ?? repositoryViews.find((item) => item.definition.project_repo_id === ui.activeProjectRepoId)?.definition.display_name ?? "No repository"}</span><span className="review-badge" title="Branch Review never changes repository content"><ShieldCheck size={12} /> Read-only review</span></> : <span>No project selected</span>}</div>
+        <button className="command-trigger" onClick={() => dispatch({ type: "setCommandPalette", open: true })}><Command size={14} /><span>Search commands</span><kbd>Ctrl K</kbd></button>
         <IconButton label="Add repository" shortcut="Ctrl+O" onClick={() => void addRepository()}><FolderPlus size={15} /></IconButton>
         <IconButton label="Keyboard shortcuts" shortcut="?" onClick={() => dispatch({ type: "setShortcutHelp", open: true })}><HelpCircle size={15} /></IconButton>
         <IconButton label="Settings and diagnostics" onClick={() => setSettingsOpen(true)}><Settings2 size={15} /></IconButton>
@@ -411,14 +447,20 @@ export default function App() {
             {!ui.repositoryPaneCollapsed && <PanelResizeHandle className="resize-handle" />}
             <Panel defaultSize={ui.repositoryPaneCollapsed ? 96 : 83} minSize={60}>
               <div className="review-area">
-                {snapshot ? <ComparisonToolbar snapshot={snapshot} mode={ui.mode} leftFullRef={effectiveLeft} rightFullRef={effectiveRight} diffView={ui.diffView} refreshing={refreshingRepoIds.has(snapshot.repo_id)} resolvedLeft={comparison?.resolved_left} resolvedRight={comparison?.resolved_right} onMode={(mode) => void updateComparison(mode, effectiveLeft, effectiveRight)} onReferences={(left, right) => void updateComparison(ui.mode, left, right)} onDiffView={(view) => dispatch({ type: "setDiffView", view })} onRefresh={() => void refreshRepository(snapshot.repo_id)} /> : <div className="comparison-toolbar comparison-toolbar--disabled"><span>{activeRuntime?.opening ? "Opening repository…" : "Repository unavailable"}</span></div>}
+                {snapshot ? <ComparisonToolbar snapshot={snapshot} mode={ui.mode} leftFullRef={effectiveLeft} rightFullRef={effectiveRight} refreshing={refreshingRepoIds.has(snapshot.repo_id)} resolvedLeft={comparison?.resolved_left} resolvedRight={comparison?.resolved_right} onMode={(mode) => void updateComparison(mode, effectiveLeft, effectiveRight)} onReferences={(left, right) => void updateComparison(ui.mode, left, right)} onCompareUpstream={() => { if (upstreamComparison) void updateComparison("direct", upstreamComparison.upstream.full_name, upstreamComparison.local.full_name); }} onRefresh={() => void refreshRepository(snapshot.repo_id)} /> : <div className="review-toolbar review-toolbar--disabled"><span>{activeRuntime?.opening ? "Opening repository…" : "Repository unavailable"}</span></div>}
                 {operationError && <div className="operation-error"><InlineError error={operationError} /><IconButton label="Dismiss error" onClick={() => setOperationError(null)}><span aria-hidden="true">×</span></IconButton></div>}
                 {currentError ? <div className="repository-error"><InlineError error={currentError} onRetry={activeProject && ui.activeProjectRepoId ? () => { const definition = activeProject.repositories.find((item) => item.project_repo_id === ui.activeProjectRepoId); if (definition) void openDefinition(activeProject, definition, true); } : undefined} /></div> : !snapshot ? <EmptyState icon={FolderGit2} title={activeRuntime?.opening ? "Opening repository" : "Select a repository"} detail={activeRuntime?.opening ? "Reading references and working tree status." : "Choose an available repository from the left pane."} /> : (
-                  <PanelGroup direction="horizontal" onLayout={(sizes) => localStorage.setItem("branch-review:file-size", String(sizes[0]))}>
-                    <Panel defaultSize={savedPaneSize("branch-review:file-size", 25)} minSize={18} maxSize={42}><FileNavigator files={comparison?.files ?? []} search={ui.search} statusFilters={ui.statusFilters} activeFileId={ui.activeFileId} loading={comparisonQuery.isLoading || comparisonQuery.isFetching} onSearch={(search) => dispatch({ type: "setSearch", search })} onToggleStatus={(status) => dispatch({ type: "toggleStatus", status })} onSelect={(fileId) => { const path = comparison?.files.find((file) => file.file_id === fileId)?.display_path ?? null; selectedPathRef.current = path; dispatch({ type: "selectFile", fileId }); }} /></Panel>
-                    <PanelResizeHandle className="resize-handle" />
-                    <Panel defaultSize={75} minSize={45}>{comparisonQuery.error ? <InlineError error={normalizeError(comparisonQuery.error)} onRetry={() => void comparisonQuery.refetch()} /> : fileQuery.error ? <InlineError error={normalizeError(fileQuery.error)} onRetry={() => void fileQuery.refetch()} /> : <DiffViewer comparison={fileQuery.data ?? null} path={selectedFile?.display_path ?? null} view={ui.diffView} loading={fileQuery.isLoading || fileQuery.isFetching} />}</Panel>
-                  </PanelGroup>
+                  ui.filePaneCollapsed ? (
+                    comparisonQuery.error ? <InlineError error={normalizeError(comparisonQuery.error)} onRetry={() => void comparisonQuery.refetch()} /> : fileQuery.error ? <InlineError error={normalizeError(fileQuery.error)} onRetry={() => void fileQuery.refetch()} /> : diffViewer
+                  ) : (
+                    <PanelGroup direction="horizontal" onLayout={(sizes) => localStorage.setItem("branch-review:file-size", String(sizes[0]))}>
+                      <Panel defaultSize={savedPaneSize("branch-review:file-size", 24)} minSize={20} maxSize={38}>
+                        <FileNavigator files={comparison?.files ?? []} search={ui.search} statusFilters={ui.statusFilters} activeFileId={ui.activeFileId} loading={comparisonQuery.isLoading || comparisonQuery.isFetching} view={ui.fileView} collapsedFolders={ui.collapsedFolders} onSearch={(search) => dispatch({ type: "setSearch", search })} onToggleStatus={(status) => dispatch({ type: "toggleStatus", status })} onView={(view) => dispatch({ type: "setFileView", view })} onToggleFolder={(path) => dispatch({ type: "toggleFolder", path })} onSelect={(fileId) => { const path = comparison?.files.find((file) => file.file_id === fileId)?.display_path ?? null; selectedPathRef.current = path; dispatch({ type: "selectFile", fileId }); }} />
+                      </Panel>
+                      <PanelResizeHandle className="resize-handle" />
+                      <Panel defaultSize={76} minSize={48}>{comparisonQuery.error ? <InlineError error={normalizeError(comparisonQuery.error)} onRetry={() => void comparisonQuery.refetch()} /> : fileQuery.error ? <InlineError error={normalizeError(fileQuery.error)} onRetry={() => void fileQuery.refetch()} /> : diffViewer}</Panel>
+                    </PanelGroup>
+                  )
                 )}
               </div>
             </Panel>
@@ -439,6 +481,7 @@ export default function App() {
 }
 
 function StartupState() { return <div className="startup"><div className="startup__logo"><Braces size={20} /></div><span>Branch Review</span><LoaderCircle className="spin" size={15} /><small>Checking local Git and projects</small></div>; }
+function ChevronSeparator() { return <span className="context-separator" aria-hidden="true">/</span>; }
 function SetupFailure({ error, retry }: { error: FrontendError; retry(): void }) { return <main className="setup-failure"><AlertTriangle size={24} /><h1>Branch Review cannot start</h1><p>{error.message}</p><code>{error.code}</code><button className="button button--primary" onClick={retry}>Try again</button></main>; }
 function DiagnosticsDialog({ open, onClose, capabilities }: { open: boolean; onClose(): void; capabilities: BackendCapabilities | null }) {
   return <Dialog open={open} onClose={onClose} title="Settings and diagnostics" description="Local, read-only runtime information." width="medium"><section className="diagnostics"><dl><div><dt>Backend API</dt><dd>{capabilities?.api_version ?? "—"}</dd></div><div><dt>Git</dt><dd>{capabilities?.git_version ?? "Unavailable"}</dd></div><div><dt>SHA-256 repositories</dt><dd>{capabilities?.supports_sha256 ? "Supported" : "Not reported"}</dd></div><div><dt>File display limit</dt><dd>{capabilities ? `${Math.round(capabilities.max_file_bytes / 1024 / 1024)} MB` : "—"}</dd></div></dl><p><PanelLeft size={14} /> Pane sizes and diff layout are stored only on this device.</p><p><FolderGit2 size={14} /> Repository content never leaves the local Tauri process.</p></section></Dialog>;

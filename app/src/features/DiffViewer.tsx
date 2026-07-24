@@ -1,16 +1,35 @@
-import { lazy, Suspense } from "react";
-import { Binary, Box, FileCode2, FileQuestion, FileWarning, Link2, LoaderCircle } from "lucide-react";
-import type { FileComparison, FileContent, FileSide } from "../api/types";
+import { lazy, Suspense, useState } from "react";
+import {
+  Binary,
+  Box,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Columns2,
+  FileCode2,
+  FileQuestion,
+  FileWarning,
+  Link2,
+  ListCollapse,
+  LoaderCircle,
+  PanelLeftClose,
+  PanelLeftOpen,
+  Rows3,
+  Settings2,
+  WrapText,
+} from "lucide-react";
+import type { ChangedFile, FileComparison, FileContent, FileSide } from "../api/types";
 import type { DiffView } from "../state/ui-state";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
-import { formatBytes } from "./comparison-utils";
+import { IconButton } from "../components/IconButton";
+import { formatBytes, statusMeta } from "./comparison-utils";
 
 const MonacoDiffEditor = lazy(() => import("./MonacoDiff"));
 
-function languageForPath(path: string): string {
+export function languageForPath(path: string): string {
   const extension = path.split(".").pop()?.toLowerCase();
-  return ({ rs: "rust", ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript", json: "json", css: "css", scss: "scss", html: "html", md: "markdown", py: "python", toml: "toml", yml: "yaml", yaml: "yaml", sh: "shell", ps1: "powershell", sql: "sql" } as Record<string, string>)[extension ?? ""] ?? "plaintext";
+  return ({ rs: "rust", ts: "typescript", tsx: "tsx", js: "javascript", jsx: "jsx", json: "json", css: "css", scss: "scss", html: "html", md: "markdown", py: "python", toml: "toml", yml: "yaml", yaml: "yaml", sh: "shellscript", ps1: "powershell", sql: "sql" } as Record<string, string>)[extension ?? ""] ?? "text";
 }
 
 function sourceLabel(side: FileSide): string {
@@ -36,35 +55,108 @@ function ContentCard({ side }: { side: FileSide }) {
   if (content.kind === "submodule") { icon = Box; title = "Submodule pointer"; detail = content.commit_oid ?? "No commit on this side"; }
   if (content.kind === "unsupported_encoding") { icon = FileWarning; title = "Unsupported text encoding"; detail = `${formatBytes(content.size)} · only supported text encodings are rendered.`; }
   const Icon = icon;
-  return <section className="content-card"><header><span><Icon size={16} />{side.label}</span><code>{sourceLabel(side)}</code></header><div><Icon size={22} /><h3>{title}</h3><p>{detail}</p></div></section>;
+  return <section className="content-card"><header><span><Icon size={16} />{side.label}</span><code>{sourceLabel(side)}</code></header><div><Icon size={24} /><h3>{title}</h3><p>{detail}</p></div></section>;
 }
 
 function NonTextComparison({ comparison }: { comparison: FileComparison }) {
   return <div className="non-text-comparison"><ContentCard side={comparison.left} /><ContentCard side={comparison.right} /></div>;
 }
 
-export function DiffViewer({ comparison, path, view, loading }: { comparison: FileComparison | null; path: string | null; view: DiffView; loading: boolean }) {
-  if (loading) return <div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Loading file comparison</span></div>;
-  if (!comparison || !path) return <EmptyState icon={FileCode2} title="Select a changed file" detail="Choose a file from the navigator to inspect both sides." />;
-  if (comparison.left.content.kind !== "text" || comparison.right.content.kind !== "text") return <NonTextComparison comparison={comparison} />;
+interface Props {
+  comparison: FileComparison | null;
+  file: ChangedFile | null;
+  view: DiffView;
+  loading: boolean;
+  wrapLines: boolean;
+  ignoreTrimWhitespace: boolean;
+  collapseUnchanged: boolean;
+  filePaneCollapsed: boolean;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  onView(view: DiffView): void;
+  onWrapLines(enabled: boolean): void;
+  onIgnoreTrimWhitespace(enabled: boolean): void;
+  onCollapseUnchanged(enabled: boolean): void;
+  onToggleFilePane(): void;
+  onPreviousFile(): void;
+  onNextFile(): void;
+}
+
+export function DiffViewer(props: Props) {
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const path = props.file?.display_path ?? null;
+  if (props.loading) return <div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Loading file comparison</span></div>;
+  if (!props.comparison || !path || !props.file) return <EmptyState icon={FileCode2} title="Choose a file to review" detail="Select a changed file to compare its previous and current content." />;
+
+  const status = statusMeta[props.file.status];
+  const pathParts = path.split(/[\\/]/);
+  const fileName = pathParts.pop() ?? path;
 
   return (
     <section className="diff-viewer" aria-label={`Comparison for ${path}`}>
       <header className="diff-viewer__header">
-        <div><FileCode2 size={15} /><strong>{path}</strong></div>
-        <div className="diff-side-labels"><span><i className="dot dot--old" />{comparison.left.label}<code>{sourceLabel(comparison.left)}</code></span><span><i className="dot dot--new" />{comparison.right.label}<code>{sourceLabel(comparison.right)}</code></span></div>
+        <div className="diff-file-context">
+          <span className={`status-letter status-${status.group}`} aria-label={status.label}>{status.letter}</span>
+          <div className="path-breadcrumbs" title={path}>
+            {pathParts.length > 0 && <span>{pathParts.join(" / ")}</span>}
+            <strong>{fileName}</strong>
+          </div>
+          {props.file.old_display_path && <span className="rename-context">from {props.file.old_display_path}</span>}
+        </div>
+
+        <div className="diff-header-actions">
+          <div className="file-stepper" aria-label="Changed file navigation">
+            <IconButton label="Previous changed file" shortcut="Shift+K" disabled={!props.hasPrevious} onClick={props.onPreviousFile}><ChevronLeft size={15} /></IconButton>
+            <IconButton label="Next changed file" shortcut="Shift+J" disabled={!props.hasNext} onClick={props.onNextFile}><ChevronRight size={15} /></IconButton>
+          </div>
+          <IconButton label={props.filePaneCollapsed ? "Show changed files" : "Focus on diff"} onClick={props.onToggleFilePane}>
+            {props.filePaneCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </IconButton>
+          <div className="diff-layout-switcher" aria-label="Diff layout">
+            <button type="button" className={props.view === "split" ? "is-active" : ""} onClick={() => props.onView("split")} aria-label="Side-by-side diff" aria-pressed={props.view === "split"}><Columns2 size={15} /></button>
+            <button type="button" className={props.view === "unified" ? "is-active" : ""} onClick={() => props.onView("unified")} aria-label="Inline diff" aria-pressed={props.view === "unified"}><Rows3 size={15} /></button>
+          </div>
+          <div className="diff-settings">
+            <IconButton label="Diff display settings" onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /></IconButton>
+            {settingsOpen && (
+              <div className="diff-settings__popover">
+                <header>Diff display</header>
+                <label><span><WrapText size={14} /><span><strong>Wrap long lines</strong><small>Keep code inside the visible pane</small></span></span><input type="checkbox" checked={props.wrapLines} onChange={(event) => props.onWrapLines(event.target.checked)} /></label>
+                <label><span><ChevronDown size={14} /><span><strong>Ignore trim whitespace</strong><small>Hide whitespace-only line endings</small></span></span><input type="checkbox" checked={props.ignoreTrimWhitespace} onChange={(event) => props.onIgnoreTrimWhitespace(event.target.checked)} /></label>
+                <label><span><ListCollapse size={14} /><span><strong>Collapse unchanged code</strong><small>Keep three context lines around changes</small></span></span><input type="checkbox" checked={props.collapseUnchanged} onChange={(event) => props.onCollapseUnchanged(event.target.checked)} /></label>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="diff-revisions">
+          <span><i className="dot dot--old" /><strong>{props.comparison.left.label}</strong><code>{sourceLabel(props.comparison.left)}</code></span>
+          <span className="diff-revisions__arrow">→</span>
+          <span><i className="dot dot--new" /><strong>{props.comparison.right.label}</strong><code>{sourceLabel(props.comparison.right)}</code></span>
+        </div>
       </header>
+
       <div className="diff-viewer__editor">
-        <ErrorBoundary resetKey={comparison.file_id} fallback={(_error, reset) => <div className="diff-render-error"><FileWarning size={22} /><strong>Diff renderer failed</strong><span>The rest of the workspace is still available.</span><button className="button button--ghost" onClick={reset}>Try again</button></div>}>
-          <Suspense fallback={<div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Starting diff renderer</span></div>}>
-          <MonacoDiffEditor key={comparison.file_id}
-            original={comparison.left.content.text}
-            modified={comparison.right.content.text}
-            language={languageForPath(path)}
-            split={view === "split"}
-          />
-          </Suspense>
-        </ErrorBoundary>
+        {props.comparison.left.content.kind !== "text" || props.comparison.right.content.kind !== "text" ? (
+          <NonTextComparison comparison={props.comparison} />
+        ) : (
+          <ErrorBoundary resetKey={props.comparison.file_id} fallback={(_error, reset) => <div className="diff-render-error"><FileWarning size={22} /><strong>Diff renderer failed</strong><span>The changed-file list is still available.</span><button className="button button--ghost" onClick={reset}>Try again</button></div>}>
+            <Suspense fallback={<div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Preparing syntax highlighting</span></div>}>
+              <MonacoDiffEditor
+                key={props.comparison.file_id}
+                fileId={props.comparison.file_id}
+                path={path}
+                original={props.comparison.left.content.text}
+                modified={props.comparison.right.content.text}
+                language={languageForPath(path)}
+                split={props.view === "split"}
+                wrapLines={props.wrapLines}
+                ignoreTrimWhitespace={props.ignoreTrimWhitespace}
+                collapseUnchanged={props.collapseUnchanged}
+              />
+            </Suspense>
+          </ErrorBoundary>
+        )}
       </div>
     </section>
   );

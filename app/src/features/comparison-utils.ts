@@ -1,12 +1,24 @@
 import type { ChangeKind, ChangedFile, ComparisonMode, ComparisonRequest, GitReference, RefId } from "../api/types";
 
 export const modeLabels: Record<ComparisonMode, string> = {
-  all_uncommitted: "All changes",
+  all_uncommitted: "Working tree",
   unstaged: "Unstaged",
   staged: "Staged",
-  direct: "Branches",
-  since_merge_base: "Since split",
+  direct: "Branch tips",
+  since_merge_base: "Changes since split",
 };
+
+export interface UpstreamComparison {
+  local: GitReference;
+  upstream: GitReference;
+}
+
+export function findUpstreamComparison(references: GitReference[]): UpstreamComparison | null {
+  const local = references.find((reference) => reference.kind === "local_branch" && reference.is_head);
+  if (!local?.upstream_full_name) return null;
+  const upstream = references.find((reference) => reference.full_name === local.upstream_full_name);
+  return upstream ? { local, upstream } : null;
+}
 
 export const statusMeta: Record<ChangeKind, { letter: string; label: string; group: string }> = {
   added: { letter: "A", label: "Added", group: "added" },

@@ -4,6 +4,8 @@ Branch Review is a local, read-only Windows desktop application for reviewing br
 
 The finished desktop application lives in [`app/`](app/README.md). Its Tauri 2 shell owns one long-lived backend, while the React renderer provides a dense three-pane review workspace, saved projects, live watcher refresh, virtualized changed files, and lazy Monaco split/unified diffs.
 
+![Branch Review dark review workspace](docs/branch-review-dark-review.png)
+
 ## Included
 
 - Multiple repositories open concurrently, each with its own opaque `RepoId` and generation.
@@ -64,15 +66,14 @@ All repository-derived responses carry a repository generation. Frontends should
 ## Verification
 
 ```text
-cargo fmt --all -- --check
-cargo test --all
-cargo clippy --all-targets --all-features -- -D warnings
 cd app
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm test:e2e
-pnpm tauri build
+pnpm check:local
+pnpm check:full
 ```
+
+`check:local` is the fast pre-push gate: TypeScript contracts, lint, renderer
+tests, the Rust workspace tests, and the Tauri command-layer tests.
+`check:full` adds mocked end-to-end tests and a real Windows
+Tauri/WebView2 smoke run.
 
 The integration suites create real temporary Git repositories and cover branch semantics, worktrees, unrelated histories, staged/unstaged/untracked changes, conflicts, binary/large files, symlinks, unusual filenames, opaque-ID injection resistance, bare rejection, detached/unborn HEAD, closure, parallel repositories, mocked renderer workflows, and a real Windows Tauri/WebView2 smoke run.

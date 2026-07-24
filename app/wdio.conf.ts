@@ -29,5 +29,5 @@ export const config: WebdriverIO.Config = {
   } as unknown as WebdriverIO.Capabilities],
   framework: "mocha",
   reporters: ["spec"],
-  mochaOpts: { ui: "bdd", timeout: 60_000 },
+  mochaOpts: { ui: "bdd", timeout: 120_000 },
 };

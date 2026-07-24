@@ -47,9 +47,9 @@ export function RepositorySidebar(props: Props) {
         <IconButton label="Collapse repositories" onClick={props.onToggleCollapsed}><ChevronLeft size={16} /></IconButton>
       </header>
       <div className="project-actions">
-        <button onClick={props.onCreateProject}><Plus size={13} /> New</button>
-        <button onClick={props.onRenameProject} disabled={!props.activeProject}><Pencil size={13} /> Rename</button>
-        <button onClick={props.onDeleteProject} disabled={!props.activeProject}><Trash2 size={13} /> Delete</button>
+        <button onClick={props.onCreateProject} aria-label="New project" title="New project"><Plus size={13} /> New</button>
+        <button onClick={props.onRenameProject} disabled={!props.activeProject} aria-label="Rename project" title="Rename project"><Pencil size={13} /> Rename</button>
+        <button onClick={props.onDeleteProject} disabled={!props.activeProject} aria-label="Delete project" title="Delete project"><Trash2 size={13} /> Delete</button>
       </div>
       <div className="sidebar-section-label"><span>Repositories</span><small>{props.repositories.length}</small></div>
       <div className="repository-list">

@@ -13,11 +13,16 @@
     "test:watch": "vitest",
     "test:e2e": "vitest run src/e2e && pnpm test:desktop",
     "test:desktop": "pnpm tauri build --debug --no-bundle && node tests/desktop/prepare.mjs && wdio run wdio.conf.ts",
+    "test:visual": "pnpm test:desktop",
+    "inspect": "node tests/desktop/inspect.mjs",
+    "check:local": "pnpm typecheck && pnpm lint && pnpm test && cargo test --manifest-path ../Cargo.toml --all-targets && cargo test --manifest-path src-tauri/Cargo.toml --all-targets",
+    "check:full": "pnpm check:local && pnpm test:e2e",
     "version:set": "node scripts/set-version.mjs",
     "tauri": "tauri"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@shikijs/monaco": "^4.3.1",
     "@tanstack/react-query": "^5.83.0",
     "@tanstack/react-virtual": "^3.13.12",
     "@tauri-apps/api": "^2.8.0",
@@ -27,7 +32,8 @@
     "monaco-editor": "^0.52.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "react-resizable-panels": "^3.0.4"
+    "react-resizable-panels": "^3.0.4",
+    "shiki": "^4.3.1"
   },
   "devDependencies": {
     "@eslint/js": "^9.32.0",

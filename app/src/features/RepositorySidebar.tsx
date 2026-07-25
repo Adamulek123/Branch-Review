@@ -1,6 +1,8 @@
-import { AlertCircle, ArchiveX, ChevronLeft, ChevronRight, CircleDot, FolderGit2, FolderPlus, GitBranch, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
+import { AlertCircle, ArchiveX, ChevronLeft, ChevronRight, CircleDot, FolderGit2, FolderPlus, GitBranch, LoaderCircle, MoreHorizontal, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
 import type { ProjectDefinition, ProjectRepositoryDefinition, RepositorySnapshot, RuntimeRepository } from "../api/types";
 import { IconButton } from "../components/IconButton";
+import { useDismissibleLayer } from "../components/useDismissibleLayer";
 import { headLabel } from "./comparison-utils";
 
 export interface RepositoryView {
@@ -31,6 +33,54 @@ function dirtyCount(snapshot: RepositorySnapshot | null): number {
   return snapshot?.status.entries.length ?? 0;
 }
 
+function RepositoryMenu({
+  definition,
+  runtime,
+  onRetry,
+  onClose,
+  onRemove,
+}: {
+  definition: ProjectRepositoryDefinition;
+  runtime: RuntimeRepository | undefined;
+  onRetry(): void;
+  onClose(): void;
+  onRemove(): void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissibleLayer({ open, rootRef, triggerRef, onDismiss: close });
+  const run = (action: () => void) => {
+    setOpen(false);
+    action();
+  };
+
+  return (
+    <div ref={rootRef} className="repository-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="repository-menu__trigger"
+        aria-label={`Actions for ${definition.display_name}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        title="Repository actions"
+        onClick={() => setOpen((value) => !value)}
+      >
+        <MoreHorizontal size={15} />
+      </button>
+      {open && (
+        <div role="menu">
+          <button role="menuitem" onClick={() => run(onRetry)}><RotateCcw size={13} /> Reopen</button>
+          <button role="menuitem" onClick={() => run(onClose)} disabled={!runtime?.repoId}><X size={13} /> Close for now</button>
+          <button role="menuitem" className="danger" onClick={() => run(onRemove)}><ArchiveX size={13} /> Remove from project</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function RepositorySidebar(props: Props) {
   if (props.collapsed) return (
     <aside className="repository-rail" aria-label="Repository navigation">
@@ -56,18 +106,35 @@ export function RepositorySidebar(props: Props) {
         {props.repositories.map(({ definition, runtime, snapshot }) => {
           const selected = definition.project_repo_id === props.activeProjectRepoId;
           const head = snapshot?.head;
-          const headText = head ? headLabel(head.kind, head.kind === "branch" ? head.full_ref : head.kind === "unborn" ? head.full_ref : null, head.kind === "detached" ? head.commit_oid : undefined) : runtime?.opening ? "opening…" : "unavailable";
+          const headText = head
+            ? headLabel(head.kind, head.kind === "branch" ? head.full_ref : head.kind === "unborn" ? head.full_ref : null, head.kind === "detached" ? head.commit_oid : undefined)
+            : runtime?.opening
+              ? "opening…"
+              : runtime?.error
+                ? "couldn't open"
+                : runtime?.repoId
+                  ? "refreshing…"
+                  : runtime
+                    ? "closed"
+                    : "unavailable";
+          const stateTitle = runtime?.error?.message ?? headText;
           return <div key={definition.project_repo_id} className={`repository-row${selected ? " is-active" : ""}${runtime?.error ? " has-error" : ""}`}>
             <button className="repository-row__main" onClick={() => props.onSelectRepository(definition.project_repo_id)}>
-              <span className="repository-row__icon">{runtime?.error ? <AlertCircle size={16} /> : <FolderGit2 size={16} />}</span>
-              <span><strong>{definition.display_name}</strong><small>{head ? <GitBranch size={11} /> : <CircleDot size={11} />}{headText}</small></span>
+              <span className="repository-row__icon">{runtime?.error ? <AlertCircle size={16} /> : runtime?.opening ? <LoaderCircle className="spin" size={16} /> : <FolderGit2 size={16} />}</span>
+              <span><strong>{definition.display_name}</strong><small title={stateTitle}>{head ? <GitBranch size={11} /> : <CircleDot size={11} />}{headText}</small></span>
               {snapshot && dirtyCount(snapshot) > 0 && <mark title={`${dirtyCount(snapshot)} changed files`}>{dirtyCount(snapshot)}</mark>}
             </button>
-            <details className="repository-menu"><summary aria-label={`Actions for ${definition.display_name}`} title="Repository actions"><MoreHorizontal size={15} /></summary><div><button onClick={() => props.onRetryRepository(definition.project_repo_id)}><RotateCcw size={13} /> Reopen</button><button onClick={() => props.onCloseRepository(definition.project_repo_id)} disabled={!runtime?.repoId}><X size={13} /> Close for now</button><button className="danger" onClick={() => props.onRemoveRepository(definition.project_repo_id)}><ArchiveX size={13} /> Remove from project</button></div></details>
+            <RepositoryMenu
+              definition={definition}
+              runtime={runtime}
+              onRetry={() => props.onRetryRepository(definition.project_repo_id)}
+              onClose={() => props.onCloseRepository(definition.project_repo_id)}
+              onRemove={() => props.onRemoveRepository(definition.project_repo_id)}
+            />
           </div>;
         })}
       </div>
-      <button className="add-repository" onClick={props.onAddRepository}><FolderPlus size={15} /><span>Add repository</span><kbd>⌘O</kbd></button>
+      <button className="add-repository" onClick={props.onAddRepository}><FolderPlus size={15} /><span>Add repository</span><kbd>Ctrl O</kbd></button>
       <footer><span><CircleDot size={11} /> Local only</span><span>Git is never modified</span></footer>
     </aside>
   );

@@ -77,4 +77,53 @@ describe("ComparisonToolbar", () => {
     expect(within(listbox).queryByText("feature")).not.toBeInTheDocument();
     expect(within(listbox).getByText("origin/main")).toBeInTheDocument();
   });
+
+  it("shows commit hashes in branch controls without a floating revision overlay", () => {
+    render(
+      <ComparisonToolbar
+        snapshot={snapshot}
+        mode="direct"
+        leftFullRef="refs/heads/main"
+        rightFullRef="refs/heads/feature"
+        refreshing={false}
+        onMode={vi.fn()}
+        onReferences={vi.fn()}
+        onCompareUpstream={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Base: main" })).toHaveTextContent("1111111");
+    expect(screen.getByRole("button", { name: "Compare: feature" })).toHaveTextContent("2222222");
+    expect(document.querySelector(".resolved-revisions")).not.toBeInTheDocument();
+  });
+
+  it("dismisses branch and review menus from outside or Escape and restores trigger focus", () => {
+    render(
+      <ComparisonToolbar
+        snapshot={snapshot}
+        mode="direct"
+        leftFullRef="refs/heads/main"
+        rightFullRef="refs/heads/feature"
+        refreshing={false}
+        onMode={vi.fn()}
+        onReferences={vi.fn()}
+        onCompareUpstream={vi.fn()}
+        onRefresh={vi.fn()}
+      />,
+    );
+
+    const baseTrigger = screen.getByRole("button", { name: "Base: main" });
+    fireEvent.click(baseTrigger);
+    expect(screen.getByRole("listbox", { name: "Base branch" })).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("listbox", { name: "Base branch" })).not.toBeInTheDocument();
+
+    const reviewTrigger = screen.getByRole("button", { name: /Branch tips/ });
+    fireEvent.click(reviewTrigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(reviewTrigger).toHaveFocus();
+  });
 });

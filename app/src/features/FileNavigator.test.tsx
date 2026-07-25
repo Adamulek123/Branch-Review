@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChangedFile, FileId } from "../api/types";
 import { FileNavigator } from "./FileNavigator";
 
@@ -16,6 +16,8 @@ const files = [
   { file_id: "file-b" as FileId, display_path: "src/b.ts", old_display_path: null, status: "added", similarity: null, staged: false, unstaged: true, conflicted: false, submodule: false },
 ] satisfies ChangedFile[];
 
+afterEach(cleanup);
+
 describe("FileNavigator keyboard behavior", () => {
   it("moves with arrows or J/K and opens the active item with Enter", () => {
     const onSelect = vi.fn();
@@ -31,5 +33,20 @@ describe("FileNavigator keyboard behavior", () => {
     expect(onSelect).toHaveBeenNthCalledWith(2, files[1].file_id);
     expect(onSelect).toHaveBeenNthCalledWith(3, files[0].file_id);
     expect(onSelect).toHaveBeenNthCalledWith(4, files[0].file_id);
+  });
+
+  it("dismisses the status filter outside and with Escape", () => {
+    render(<FileNavigator files={files} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={vi.fn()} />);
+    const trigger = screen.getByRole("button", { name: "Filter by status" });
+
+    fireEvent.click(trigger);
+    expect(screen.getByRole("menu")).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

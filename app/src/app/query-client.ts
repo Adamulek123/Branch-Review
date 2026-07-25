@@ -25,6 +25,8 @@ export const queryClient = new QueryClient({
   },
 });
 
+queryClient.setQueryDefaults(["repository"], { gcTime: Infinity });
+
 export function removeRepositoryQueries(repoId: RepoId): void {
   queryClient.removeQueries({
     predicate: (query) => query.queryKey.includes(repoId),

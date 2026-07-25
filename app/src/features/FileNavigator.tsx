@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   ChevronDown,
@@ -8,6 +8,7 @@ import {
   Filter,
   Folder,
   FolderOpen,
+  Check,
   List,
   Search,
   X,
@@ -16,7 +17,9 @@ import type { ChangedFile, FileId } from "../api/types";
 import type { FileView } from "../state/ui-state";
 import { IconButton } from "../components/IconButton";
 import { EmptyState } from "../components/EmptyState";
+import { useDismissibleLayer } from "../components/useDismissibleLayer";
 import { filterFiles, statusMeta } from "./comparison-utils";
+import { FileStatusIcon } from "./FileStatusIcon";
 
 interface Props {
   files: ChangedFile[];
@@ -34,12 +37,12 @@ interface Props {
 }
 
 const filters = [
-  { id: "added", label: "Added", letter: "A" },
-  { id: "modified", label: "Modified", letter: "M" },
-  { id: "deleted", label: "Deleted", letter: "D" },
-  { id: "renamed", label: "Renamed", letter: "R" },
-  { id: "conflicted", label: "Conflicts", letter: "U" },
-];
+  { id: "added", label: "Added", status: "added" },
+  { id: "modified", label: "Modified", status: "modified" },
+  { id: "deleted", label: "Deleted", status: "deleted" },
+  { id: "renamed", label: "Renamed", status: "renamed" },
+  { id: "conflicted", label: "Conflicts", status: "unmerged" },
+] satisfies Array<{ id: string; label: string; status: ChangedFile["status"] }>;
 
 interface FolderNode {
   name: string;
@@ -89,6 +92,8 @@ function flattenTree(root: FolderNode, collapsed: Set<string>, searching: boolea
 export function FileNavigator(props: Props) {
   const parentRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  const filterTriggerRef = useRef<HTMLButtonElement>(null);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const visibleFiles = useMemo(() => filterFiles(props.files, props.search, props.statusFilters), [props.files, props.search, props.statusFilters]);
   const rows = useMemo<NavigatorRow[]>(() => {
@@ -111,6 +116,8 @@ export function FileNavigator(props: Props) {
     window.addEventListener("branch-review:focus-filter", focus);
     return () => window.removeEventListener("branch-review:focus-filter", focus);
   }, []);
+  const closeFilters = useCallback(() => setFiltersOpen(false), []);
+  useDismissibleLayer({ open: filtersOpen, rootRef: filterMenuRef, triggerRef: filterTriggerRef, onDismiss: closeFilters });
 
   const navigate = (delta: number) => {
     if (!visibleFiles.length) return;
@@ -143,8 +150,8 @@ export function FileNavigator(props: Props) {
           {props.search && <IconButton label="Clear filter" onClick={() => props.onSearch("")}><X size={13} /></IconButton>}
           <kbd>Ctrl F</kbd>
         </label>
-        <div className="filter-menu">
-          <button type="button" className={props.statusFilters.length ? "filter-trigger is-active" : "filter-trigger"} onClick={() => setFiltersOpen((open) => !open)} aria-expanded={filtersOpen} aria-haspopup="menu">
+        <div className="filter-menu" ref={filterMenuRef}>
+          <button ref={filterTriggerRef} type="button" className={props.statusFilters.length ? "filter-trigger is-active" : "filter-trigger"} onClick={() => setFiltersOpen((open) => !open)} aria-label="Filter by status" aria-expanded={filtersOpen} aria-haspopup="menu">
             <Filter size={14} />
             {props.statusFilters.length > 0 && <span>{props.statusFilters.length}</span>}
           </button>
@@ -153,10 +160,10 @@ export function FileNavigator(props: Props) {
               <header><strong>Filter by status</strong>{props.statusFilters.length > 0 && <button type="button" onClick={() => props.statusFilters.forEach(props.onToggleStatus)}>Clear</button>}</header>
               {filters.map((filter) => (
                 <button type="button" role="menuitemcheckbox" aria-checked={props.statusFilters.includes(filter.id)} key={filter.id} onClick={() => props.onToggleStatus(filter.id)}>
-                  <span className={`status-letter status-${filter.id}`}>{filter.letter}</span>
+                  <FileStatusIcon status={filter.status} decorative />
                   <span>{filter.label}</span>
                   <small>{counts[filter.id]}</small>
-                  <span className={props.statusFilters.includes(filter.id) ? "checkbox is-checked" : "checkbox"}>{props.statusFilters.includes(filter.id) && <CheckMark />}</span>
+                  <span className={props.statusFilters.includes(filter.id) ? "checkbox is-checked" : "checkbox"}>{props.statusFilters.includes(filter.id) && <Check size={11} aria-hidden="true" />}</span>
                 </button>
               ))}
             </div>
@@ -183,10 +190,9 @@ export function FileNavigator(props: Props) {
                   </button>
                 );
               }
-              const meta = statusMeta[row.file.status];
               return (
                 <button key={row.file.file_id} type="button" className={`file-row${row.file.file_id === props.activeFileId ? " is-active" : ""}`} style={{ transform: `translateY(${virtualRow.start}px)`, paddingLeft: `${12 + row.depth * 14}px` }} onClick={() => props.onSelect(row.file.file_id)} aria-current={row.file.file_id === props.activeFileId ? "true" : undefined} title={row.file.display_path}>
-                  <span className={`status-letter status-${meta.group}`} aria-label={meta.label}>{meta.letter}</span>
+                  <FileStatusIcon status={row.file.status} />
                   <span className="file-row__paths"><strong>{row.name}</strong>{row.directory && <small>{row.directory}</small>}{row.file.old_display_path && <small>{row.file.old_display_path} → {row.file.display_path}</small>}</span>
                   <span className="file-row__flags">{row.file.conflicted && <i title="Conflict">!</i>}{row.file.staged && <i title="Staged">S</i>}{row.file.unstaged && <i title="Working tree">W</i>}{row.file.submodule && <i title="Submodule">M</i>}</span>
                   <span className="sr-only">{row.file.display_path}</span>
@@ -198,8 +204,4 @@ export function FileNavigator(props: Props) {
       )}
     </aside>
   );
-}
-
-function CheckMark() {
-  return <span aria-hidden="true">✓</span>;
 }

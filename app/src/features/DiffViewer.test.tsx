@@ -1,9 +1,16 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiffViewer } from "./DiffViewer";
 import type { ChangedFile, FileComparison, FileContent, FileId, ComparisonId, RepoId } from "../api/types";
 
-vi.mock("./MonacoDiff", () => ({ default: ({ modified }: { modified: string }) => <div data-testid="monaco-diff">{modified}</div> }));
+vi.mock("./MonacoDiff", () => ({
+  default: ({ original, modified }: { original: string; modified: string }) => (
+    <div data-testid="monaco-diff">
+      <span data-testid="original-content">{original}</span>
+      <span data-testid="modified-content">{modified}</span>
+    </div>
+  ),
+}));
 
 const contentCases: Array<[FileContent, string]> = [
   [{ kind: "binary", size: 42 }, "Binary file"],
@@ -55,6 +62,8 @@ const viewProps = {
   onNextFile: vi.fn(),
 };
 
+afterEach(cleanup);
+
 describe("DiffViewer", () => {
   it.each(contentCases)("renders a deliberate %s presentation", (content, heading) => {
     render(<DiffViewer {...viewProps} comparison={comparison(content)} file={file} />);
@@ -71,5 +80,38 @@ describe("DiffViewer", () => {
     expect(await screen.findByTestId("monaco-diff")).toHaveTextContent("old");
     view.rerender(<DiffViewer {...viewProps} comparison={second} file={{ ...file, file_id: second.file_id, display_path: "second.ts" }} />);
     expect(await screen.findByTestId("monaco-diff")).toHaveTextContent("new");
+  });
+  it("renders an added text file against an empty original side", async () => {
+    const added = comparison({ kind: "text", text: "added contents\n", encoding: "utf-8", size: 15 });
+    added.left.content = { kind: "missing" };
+
+    render(<DiffViewer {...viewProps} comparison={added} file={{ ...file, status: "added", display_path: "added.ts" }} />);
+
+    expect(await screen.findByTestId("original-content")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("modified-content")).toHaveTextContent("added contents");
+    expect(screen.queryByText("Content unavailable")).not.toBeInTheDocument();
+  });
+  it("renders a deleted text file against an empty modified side", async () => {
+    const deleted = comparison({ kind: "text", text: "deleted contents\n", encoding: "utf-8", size: 17 });
+    deleted.right.content = { kind: "missing" };
+
+    render(<DiffViewer {...viewProps} comparison={deleted} file={{ ...file, status: "deleted", display_path: "deleted.ts" }} />);
+
+    expect(await screen.findByTestId("original-content")).toHaveTextContent("deleted contents");
+    expect(screen.getByTestId("modified-content")).toBeEmptyDOMElement();
+  });
+  it("dismisses diff settings outside and with Escape", async () => {
+    render(<DiffViewer {...viewProps} comparison={comparison({ kind: "text", text: "content", encoding: "utf-8", size: 7 })} file={file} />);
+    const trigger = screen.getByRole("button", { name: "Diff display settings" });
+
+    fireEvent.click(trigger);
+    expect(screen.getByText("Diff display")).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByText("Diff display")).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByText("Diff display")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
   });
 });

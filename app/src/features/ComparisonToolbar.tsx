@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftRight,
   Check,
@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { ComparisonMode, GitReference, RepositorySnapshot } from "../api/types";
 import { IconButton } from "../components/IconButton";
+import { useDismissibleLayer } from "../components/useDismissibleLayer";
 import { findUpstreamComparison, modeLabels, shortRef } from "./comparison-utils";
 
 interface Props {
@@ -20,8 +21,6 @@ interface Props {
   leftFullRef: string | null;
   rightFullRef: string | null;
   refreshing: boolean;
-  resolvedLeft?: { display_name: string; commit_oid: string } | null;
-  resolvedRight?: { display_name: string; commit_oid: string } | null;
   onMode(mode: ComparisonMode): void;
   onReferences(left: string | null, right: string | null): void;
   onCompareUpstream(): void;
@@ -50,6 +49,7 @@ function BranchPicker({
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const current = references.find((reference) => reference.full_name === value) ?? null;
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase();
@@ -62,26 +62,14 @@ function BranchPicker({
     { label: "Remote-tracking · cached", items: visible.filter((reference) => reference.kind === "remote_branch") },
   ].filter((group) => group.items.length);
 
-  useEffect(() => {
-    if (!open) return;
-    const close = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    window.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("mousedown", close);
-      window.removeEventListener("keydown", escape);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useDismissibleLayer({ open, rootRef, triggerRef, onDismiss: close });
 
   return (
     <div className="branch-picker" ref={rootRef}>
       <span className="branch-picker__label">{label}</span>
       <button
+        ref={triggerRef}
         className="branch-picker__trigger"
         type="button"
         aria-label={`${label}: ${current ? shortRef(current.full_name) : "Select branch"}`}
@@ -93,7 +81,10 @@ function BranchPicker({
         }}
       >
         <GitBranch size={14} />
-        <span>{current ? shortRef(current.full_name) : "Select branch"}</span>
+        <span>
+          <strong>{current ? shortRef(current.full_name) : "Select branch"}</strong>
+          {current && <small>{current.commit_oid.slice(0, 7)}</small>}
+        </span>
         {current?.is_head && <em>HEAD</em>}
         <ChevronDown size={13} />
       </button>
@@ -116,6 +107,7 @@ function BranchPicker({
                     onClick={() => {
                       onChange(reference.full_name);
                       setOpen(false);
+                      triggerRef.current?.focus();
                     }}
                   >
                     <span><strong>{shortRef(reference.full_name)}</strong><small>{reference.commit_oid.slice(0, 7)}</small></span>
@@ -136,26 +128,21 @@ function BranchPicker({
 export function ComparisonToolbar(props: Props) {
   const [scopeOpen, setScopeOpen] = useState(false);
   const scopeRef = useRef<HTMLDivElement>(null);
+  const scopeTriggerRef = useRef<HTMLButtonElement>(null);
   const branchMode = props.mode === "direct" || props.mode === "since_merge_base";
   const fallbackLeft = props.leftFullRef ?? props.snapshot.references.find((reference) => reference.is_head)?.full_name ?? props.snapshot.references[0]?.full_name ?? null;
   const fallbackRight = props.rightFullRef ?? props.snapshot.references.find((reference) => !reference.is_head)?.full_name ?? props.snapshot.references[1]?.full_name ?? fallbackLeft;
   const upstream = findUpstreamComparison(props.snapshot.references);
   const activeMode = modes.find((mode) => mode.id === props.mode)!;
 
-  useEffect(() => {
-    if (!scopeOpen) return;
-    const close = (event: MouseEvent) => {
-      if (!scopeRef.current?.contains(event.target as Node)) setScopeOpen(false);
-    };
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, [scopeOpen]);
+  const closeScope = useCallback(() => setScopeOpen(false), []);
+  useDismissibleLayer({ open: scopeOpen, rootRef: scopeRef, triggerRef: scopeTriggerRef, onDismiss: closeScope });
 
   return (
     <section className="review-toolbar" aria-label="Comparison controls">
       <div className="review-toolbar__scope" ref={scopeRef}>
         <span>Review</span>
-        <button type="button" className="scope-trigger" onClick={() => setScopeOpen((open) => !open)} aria-haspopup="menu" aria-expanded={scopeOpen}>
+        <button ref={scopeTriggerRef} type="button" className="scope-trigger" onClick={() => setScopeOpen((open) => !open)} aria-haspopup="menu" aria-expanded={scopeOpen}>
           {props.mode === "since_merge_base" ? <Workflow size={15} /> : branchMode ? <GitCompareArrows size={15} /> : <Sparkles size={15} />}
           <span><strong>{modeLabels[props.mode]}</strong><small>{activeMode.detail}</small></span>
           <ChevronDown size={14} />
@@ -177,7 +164,7 @@ export function ComparisonToolbar(props: Props) {
       {branchMode ? (
         <div className="review-toolbar__branches">
           <BranchPicker label="Base" value={fallbackLeft} references={props.snapshot.references} onChange={(value) => props.onReferences(value, fallbackRight)} />
-          <IconButton label="Swap base and compare branches" onClick={() => props.onReferences(fallbackRight, fallbackLeft)}><ArrowLeftRight size={15} /></IconButton>
+          <IconButton className="toolbar-icon-button" label="Swap base and compare branches" onClick={() => props.onReferences(fallbackRight, fallbackLeft)}><ArrowLeftRight size={15} /></IconButton>
           <BranchPicker label="Compare" value={fallbackRight} references={props.snapshot.references} onChange={(value) => props.onReferences(fallbackLeft, value)} />
         </div>
       ) : (
@@ -195,18 +182,10 @@ export function ComparisonToolbar(props: Props) {
           </button>
         )}
         {!upstream && props.snapshot.head.kind === "branch" && <span className="upstream-unavailable" title="The checked-out branch has no available cached upstream">No upstream</span>}
-        <IconButton label="Refresh repository" shortcut="Ctrl+R" onClick={props.onRefresh} disabled={props.refreshing}>
+        <IconButton className="toolbar-icon-button" label="Refresh repository" shortcut="Ctrl+R" onClick={props.onRefresh} disabled={props.refreshing}>
           <RefreshCw size={15} className={props.refreshing ? "spin" : ""} />
         </IconButton>
       </div>
-
-      {branchMode && props.resolvedLeft && props.resolvedRight && (
-        <div className="resolved-revisions" title={`${props.resolvedLeft.commit_oid} → ${props.resolvedRight.commit_oid}`}>
-          <code>{shortRef(props.resolvedLeft.display_name)} · {props.resolvedLeft.commit_oid.slice(0, 7)}</code>
-          <span>→</span>
-          <code>{shortRef(props.resolvedRight.display_name)} · {props.resolvedRight.commit_oid.slice(0, 7)}</code>
-        </div>
-      )}
     </section>
   );
 }

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useCallback, useRef, useState } from "react";
 import {
   Binary,
   Box,
@@ -23,7 +23,9 @@ import type { DiffView } from "../state/ui-state";
 import { EmptyState } from "../components/EmptyState";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { IconButton } from "../components/IconButton";
-import { formatBytes, statusMeta } from "./comparison-utils";
+import { useDismissibleLayer } from "../components/useDismissibleLayer";
+import { formatBytes } from "./comparison-utils";
+import { FileStatusIcon } from "./FileStatusIcon";
 
 const MonacoDiffEditor = lazy(() => import("./MonacoDiff"));
 
@@ -62,6 +64,12 @@ function NonTextComparison({ comparison }: { comparison: FileComparison }) {
   return <div className="non-text-comparison"><ContentCard side={comparison.left} /><ContentCard side={comparison.right} /></div>;
 }
 
+function textForDiff(content: FileContent): string | null {
+  if (content.kind === "text") return content.text;
+  if (content.kind === "missing") return "";
+  return null;
+}
+
 interface Props {
   comparison: FileComparison | null;
   file: ChangedFile | null;
@@ -84,19 +92,29 @@ interface Props {
 
 export function DiffViewer(props: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const settingsTriggerRef = useRef<HTMLButtonElement>(null);
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  useDismissibleLayer({ open: settingsOpen, rootRef: settingsRef, triggerRef: settingsTriggerRef, onDismiss: closeSettings });
   const path = props.file?.display_path ?? null;
   if (props.loading) return <div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Loading file comparison</span></div>;
   if (!props.comparison || !path || !props.file) return <EmptyState icon={FileCode2} title="Choose a file to review" detail="Select a changed file to compare its previous and current content." />;
 
-  const status = statusMeta[props.file.status];
   const pathParts = path.split(/[\\/]/);
   const fileName = pathParts.pop() ?? path;
+  const original = textForDiff(props.comparison.left.content);
+  const modified = textForDiff(props.comparison.right.content);
+  const textDiff = (
+    (props.comparison.left.content.kind === "text" || props.comparison.right.content.kind === "text")
+    && original !== null
+    && modified !== null
+  ) ? { original, modified } : null;
 
   return (
     <section className="diff-viewer" aria-label={`Comparison for ${path}`}>
       <header className="diff-viewer__header">
         <div className="diff-file-context">
-          <span className={`status-letter status-${status.group}`} aria-label={status.label}>{status.letter}</span>
+          <FileStatusIcon status={props.file.status} />
           <div className="path-breadcrumbs" title={path}>
             {pathParts.length > 0 && <span>{pathParts.join(" / ")}</span>}
             <strong>{fileName}</strong>
@@ -116,8 +134,8 @@ export function DiffViewer(props: Props) {
             <button type="button" className={props.view === "split" ? "is-active" : ""} onClick={() => props.onView("split")} aria-label="Side-by-side diff" aria-pressed={props.view === "split"}><Columns2 size={15} /></button>
             <button type="button" className={props.view === "unified" ? "is-active" : ""} onClick={() => props.onView("unified")} aria-label="Inline diff" aria-pressed={props.view === "unified"}><Rows3 size={15} /></button>
           </div>
-          <div className="diff-settings">
-            <IconButton label="Diff display settings" onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /></IconButton>
+          <div className="diff-settings" ref={settingsRef}>
+            <IconButton ref={settingsTriggerRef} label="Diff display settings" onClick={() => setSettingsOpen((open) => !open)}><Settings2 size={16} /></IconButton>
             {settingsOpen && (
               <div className="diff-settings__popover">
                 <header>Diff display</header>
@@ -137,17 +155,15 @@ export function DiffViewer(props: Props) {
       </header>
 
       <div className="diff-viewer__editor">
-        {props.comparison.left.content.kind !== "text" || props.comparison.right.content.kind !== "text" ? (
-          <NonTextComparison comparison={props.comparison} />
-        ) : (
+        {textDiff ? (
           <ErrorBoundary resetKey={props.comparison.file_id} fallback={(_error, reset) => <div className="diff-render-error"><FileWarning size={22} /><strong>Diff renderer failed</strong><span>The changed-file list is still available.</span><button className="button button--ghost" onClick={reset}>Try again</button></div>}>
             <Suspense fallback={<div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Preparing syntax highlighting</span></div>}>
               <MonacoDiffEditor
                 key={props.comparison.file_id}
                 fileId={props.comparison.file_id}
                 path={path}
-                original={props.comparison.left.content.text}
-                modified={props.comparison.right.content.text}
+                original={textDiff.original}
+                modified={textDiff.modified}
                 language={languageForPath(path)}
                 split={props.view === "split"}
                 wrapLines={props.wrapLines}
@@ -156,6 +172,8 @@ export function DiffViewer(props: Props) {
               />
             </Suspense>
           </ErrorBoundary>
+        ) : (
+          <NonTextComparison comparison={props.comparison} />
         )}
       </div>
     </section>

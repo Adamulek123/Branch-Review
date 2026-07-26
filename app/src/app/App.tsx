@@ -7,7 +7,7 @@ import { listenForRepositoryUpdates } from "../api/events";
 import { generations } from "../api/generations";
 import { loadFileWithComparisonRecovery } from "../api/comparison-lifecycle";
 import type { BackendCapabilities, ComparisonMode, FrontendError, ProjectDefinition, ProjectRepositoryDefinition, RepoId, RepositorySnapshot, RuntimeRepository } from "../api/types";
-import { queryClient, queryKeys, removeRepositoryQueries } from "./query-client";
+import { queryClient, queryKeys, removeOlderRepositoryGenerations, removeRepositoryQueries } from "./query-client";
 import { useUi } from "../state/ui-state";
 import { IconButton } from "../components/IconButton";
 import { Dialog } from "../components/Dialog";
@@ -66,6 +66,10 @@ export default function App() {
   const cacheSnapshot = useCallback((snapshot: RepositorySnapshot) => {
     generations.accept(snapshot);
     queryClient.setQueryData(queryKeys.repository(snapshot.repo_id, snapshot.generation), snapshot);
+    window.setTimeout(
+      () => removeOlderRepositoryGenerations(snapshot.repo_id, snapshot.generation),
+      0,
+    );
   }, []);
 
   const setRepositorySnapshot = useCallback((snapshot: RepositorySnapshot) => {

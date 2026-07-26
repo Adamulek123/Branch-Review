@@ -32,3 +32,14 @@ export function removeRepositoryQueries(repoId: RepoId): void {
     predicate: (query) => query.queryKey.includes(repoId),
   });
 }
+
+export function removeOlderRepositoryGenerations(repoId: RepoId, generation: number): void {
+  queryClient.removeQueries({
+    predicate: (query) => {
+      const [, queryRepoId, queryGeneration] = query.queryKey;
+      return queryRepoId === repoId
+        && typeof queryGeneration === "number"
+        && queryGeneration < generation;
+    },
+  });
+}

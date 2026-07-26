@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
 };
 
@@ -59,6 +59,8 @@ struct RepositoryHandle {
     comparisons: Mutex<VecDeque<CachedComparison>>,
     cancellation: CancellationToken,
     watcher: Mutex<Option<RepositoryWatcher>>,
+    watcher_refresh_running: AtomicBool,
+    watcher_refresh_requested: AtomicBool,
 }
 
 impl RepositoryHandle {
@@ -75,6 +77,8 @@ impl RepositoryHandle {
             comparisons: Mutex::new(VecDeque::new()),
             cancellation: CancellationToken::new(),
             watcher: Mutex::new(None),
+            watcher_refresh_running: AtomicBool::new(false),
+            watcher_refresh_requested: AtomicBool::new(false),
         }
     }
 }
@@ -175,14 +179,41 @@ impl RepositoryRegistry {
             let Some(handle) = weak_handle.upgrade() else {
                 return;
             };
+            handle
+                .watcher_refresh_requested
+                .store(true, Ordering::Release);
+            if handle.watcher_refresh_running.swap(true, Ordering::AcqRel) {
+                return;
+            }
             let repo_id = repo_id.clone();
             tokio::spawn(async move {
-                handle.generation.fetch_add(1, Ordering::SeqCst);
-                if let Ok(snapshot) = registry.refresh_repository(&repo_id).await {
-                    let _ = registry.updates.send(RepositoryUpdate {
-                        repo_id,
-                        generation: snapshot.generation,
-                    });
+                loop {
+                    handle
+                        .watcher_refresh_requested
+                        .store(false, Ordering::Release);
+                    if let Ok(snapshot) = registry.refresh_repository(&repo_id).await {
+                        let _ = registry.updates.send(RepositoryUpdate {
+                            repo_id: repo_id.clone(),
+                            generation: snapshot.generation,
+                        });
+                    }
+                    if handle
+                        .watcher_refresh_requested
+                        .swap(false, Ordering::AcqRel)
+                    {
+                        continue;
+                    }
+
+                    handle
+                        .watcher_refresh_running
+                        .store(false, Ordering::Release);
+                    if !handle
+                        .watcher_refresh_requested
+                        .swap(false, Ordering::AcqRel)
+                        || handle.watcher_refresh_running.swap(true, Ordering::AcqRel)
+                    {
+                        break;
+                    }
                 }
             });
         });
@@ -232,11 +263,21 @@ impl RepositoryRegistry {
 
     pub async fn refresh_repository(&self, repo_id: &RepoId) -> Result<RepositorySnapshot> {
         let handle = self.handle(repo_id).await?;
-        self.refresh_handle(&handle).await
+        let _refresh = handle.refresh_lock.lock().await;
+        handle.generation.fetch_add(1, Ordering::SeqCst);
+        handle.comparisons.lock().await.clear();
+        self.refresh_handle_locked(&handle).await
     }
 
     async fn refresh_handle(&self, handle: &Arc<RepositoryHandle>) -> Result<RepositorySnapshot> {
         let _refresh = handle.refresh_lock.lock().await;
+        self.refresh_handle_locked(handle).await
+    }
+
+    async fn refresh_handle_locked(
+        &self,
+        handle: &Arc<RepositoryHandle>,
+    ) -> Result<RepositorySnapshot> {
         for attempt in 0..2 {
             if handle.cancellation.is_cancelled() {
                 return Err(AppError::RepositoryClosed);
@@ -375,6 +416,12 @@ impl RepositoryRegistry {
         };
 
         let status_paths = handle.status_paths.read().await.clone();
+        let status_by_path: HashMap<_, _> = snapshot
+            .status
+            .entries
+            .iter()
+            .map(|status| (status.display_path.as_str(), status))
+            .collect();
         let mut entries = if left.is_none() && matches!(mode, ComparisonMode::AllUncommitted) {
             status_as_name_entries(&snapshot.status, &status_paths)
         } else {
@@ -426,11 +473,8 @@ impl RepositoryRegistry {
                 &snapshot.info.worktree_root,
             );
             let file_id = descriptor.file_id.clone();
-            let status_entry = snapshot
-                .status
-                .entries
-                .iter()
-                .find(|s| s.display_path == display_path(&entry.path));
+            let entry_display_path = display_path(&entry.path);
+            let status_entry = status_by_path.get(entry_display_path.as_str()).copied();
             if let Some(status) = status_entry.filter(|status| status.submodule) {
                 if matches!(descriptor.left, ContentSource::Worktree { .. }) {
                     descriptor.left = ContentSource::Submodule {
@@ -445,7 +489,7 @@ impl RepositoryRegistry {
             }
             files.push(ChangedFile {
                 file_id: file_id.clone(),
-                display_path: display_path(&entry.path),
+                display_path: entry_display_path,
                 old_display_path: entry.old_path.as_ref().map(|p| display_path(p)),
                 status: entry.kind,
                 staged: status_entry.is_some_and(|s| s.staged),

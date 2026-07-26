@@ -481,3 +481,31 @@ async fn watcher_invalidates_only_the_changed_repository_and_manual_refresh_rema
             .any(|entry| entry.display_path == "file.txt" && entry.unstaged)
     );
 }
+
+#[tokio::test]
+async fn manual_refresh_advances_generation_and_invalidates_cached_comparisons() {
+    let repo = init();
+    write(repo.path(), "file.txt", "one\n");
+    commit_all(repo.path(), "initial");
+    write(repo.path(), "file.txt", "changed\n");
+
+    let registry = RepositoryRegistry::system();
+    let snapshot = registry.open_repository(repo.path()).await.unwrap();
+    let comparison = registry
+        .create_comparison(&snapshot.repo_id, ComparisonRequest::Unstaged)
+        .await
+        .unwrap();
+    let file_id = comparison.files[0].file_id.clone();
+
+    let refreshed = registry
+        .refresh_repository(&snapshot.repo_id)
+        .await
+        .unwrap();
+
+    assert!(refreshed.generation > snapshot.generation);
+    let error = registry
+        .get_file_comparison(&snapshot.repo_id, &comparison.comparison_id, &file_id)
+        .await
+        .unwrap_err();
+    assert!(matches!(error, github_diff::AppError::InvalidComparisonId));
+}

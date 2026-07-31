@@ -1,13 +1,20 @@
 use std::path::PathBuf;
 
 use github_diff::{
-    BackendCapabilities, ComparisonId, ComparisonRequest, ComparisonResult, FileComparison, FileId,
-    FrontendError, ProjectDefinition, RepoId, RepositoryInfo, RepositorySnapshot,
+    AuditEvidence, AuditId, AuditRequest, AuditSession, BackendCapabilities, ComparisonId,
+    ComparisonRequest, ComparisonResult, EvidenceId, FileComparison, FileId, FindingId,
+    FindingNavigation, FrontendError, ProjectDefinition, RepoId, RepositoryInfo,
+    RepositorySnapshot,
 };
 use serde::Deserialize;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
+use crate::audit::{AuditProviderSettings, AuditProviderTest, SetAuditSecretPaths};
+use crate::remediation::{
+    CodexAvailability, RemediationId, RemediationSession, RespondRemediationRequest,
+    StartRemediationRequest,
+};
 use crate::state::AppState;
 
 #[derive(Deserialize)]
@@ -18,6 +25,8 @@ pub struct PathArgs {
 #[derive(Deserialize)]
 pub struct RepoArgs {
     repo_id: RepoId,
+    #[serde(default)]
+    allow_active_work: bool,
 }
 
 #[derive(Deserialize)]
@@ -41,6 +50,54 @@ pub struct SaveProjectArgs {
 #[derive(Deserialize)]
 pub struct DeleteProjectArgs {
     project_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct AuditIdArgs {
+    audit_id: AuditId,
+}
+
+#[derive(Deserialize)]
+pub struct ListAuditsArgs {
+    repo_id: RepoId,
+}
+
+#[derive(Deserialize)]
+pub struct StartAuditArgs {
+    request: AuditRequest,
+}
+
+#[derive(Deserialize)]
+pub struct EvidenceArgs {
+    audit_id: AuditId,
+    evidence_id: EvidenceId,
+}
+
+#[derive(Deserialize)]
+pub struct FindingNavigationArgs {
+    audit_id: AuditId,
+    finding_id: FindingId,
+}
+
+#[derive(Deserialize)]
+pub struct RemediationIdArgs {
+    remediation_id: RemediationId,
+}
+
+#[derive(Deserialize)]
+pub struct ListRemediationsArgs {
+    repo_id: RepoId,
+}
+
+#[derive(Deserialize)]
+pub struct StartRemediationArgs {
+    request: StartRemediationRequest,
+}
+
+#[derive(Deserialize)]
+pub struct ResumeRemediationArgs {
+    remediation_id: RemediationId,
+    repo_id: RepoId,
 }
 
 fn with_repo(mut error: FrontendError, repo_id: &RepoId) -> FrontendError {
@@ -97,6 +154,19 @@ pub async fn close_repository(
     args: RepoArgs,
 ) -> Result<(), FrontendError> {
     let repo_id = args.repo_id;
+    if (state.audits.has_active(&repo_id.0).await || state.remediation.has_active(&repo_id.0).await)
+        && !args.allow_active_work
+    {
+        return Err(FrontendError {
+            code: github_diff::ErrorCode::Io,
+            message:
+                "This repository has active audit or agent work. Confirm closing it explicitly."
+                    .into(),
+            retryable: false,
+            repo_id: Some(repo_id.0.clone()),
+            operation_id: None,
+        });
+    }
     state
         .backend
         .close_repository(repo_id.clone())
@@ -196,4 +266,179 @@ pub async fn delete_project(
     args: DeleteProjectArgs,
 ) -> Result<(), FrontendError> {
     state.projects.delete(&args.project_id).await
+}
+
+#[tauri::command]
+pub async fn get_audit_provider_settings(
+    state: State<'_, AppState>,
+) -> Result<AuditProviderSettings, FrontendError> {
+    Ok(state.audits.provider_settings().await)
+}
+
+#[tauri::command]
+pub async fn test_audit_provider(
+    state: State<'_, AppState>,
+) -> Result<AuditProviderTest, FrontendError> {
+    state.audits.test_provider().await
+}
+
+#[tauri::command]
+pub async fn set_audit_secret_paths(
+    state: State<'_, AppState>,
+    args: SetAuditSecretPaths,
+) -> Result<(), FrontendError> {
+    state.audits.set_secret_paths(args.paths).await
+}
+
+#[tauri::command]
+pub async fn start_audit(
+    state: State<'_, AppState>,
+    args: StartAuditArgs,
+) -> Result<AuditSession, FrontendError> {
+    state.audits.start(args.request).await
+}
+
+#[tauri::command]
+pub async fn list_audits(
+    state: State<'_, AppState>,
+    args: ListAuditsArgs,
+) -> Result<Vec<AuditSession>, FrontendError> {
+    Ok(state.audits.list(&args.repo_id.0).await)
+}
+
+#[tauri::command]
+pub async fn get_audit_session(
+    state: State<'_, AppState>,
+    args: AuditIdArgs,
+) -> Result<AuditSession, FrontendError> {
+    state.audits.get(&args.audit_id).await
+}
+
+#[tauri::command]
+pub async fn cancel_audit(
+    state: State<'_, AppState>,
+    args: AuditIdArgs,
+) -> Result<AuditSession, FrontendError> {
+    state.audits.cancel(&args.audit_id).await
+}
+
+#[tauri::command]
+pub async fn delete_audit(
+    state: State<'_, AppState>,
+    args: AuditIdArgs,
+) -> Result<(), FrontendError> {
+    state.audits.delete(&args.audit_id).await
+}
+
+#[tauri::command]
+pub async fn get_audit_evidence(
+    state: State<'_, AppState>,
+    args: EvidenceArgs,
+) -> Result<AuditEvidence, FrontendError> {
+    state
+        .audits
+        .evidence(&args.audit_id, &args.evidence_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn resolve_finding_navigation(
+    state: State<'_, AppState>,
+    args: FindingNavigationArgs,
+) -> Result<FindingNavigation, FrontendError> {
+    state
+        .audits
+        .resolve_navigation(&args.audit_id, &args.finding_id)
+        .await
+}
+
+#[tauri::command]
+pub async fn get_codex_availability(
+    state: State<'_, AppState>,
+) -> Result<CodexAvailability, FrontendError> {
+    Ok(state.remediation.availability().await)
+}
+
+#[tauri::command]
+pub async fn start_remediation(
+    state: State<'_, AppState>,
+    args: StartRemediationArgs,
+) -> Result<RemediationSession, FrontendError> {
+    let live = state
+        .backend
+        .get_repository_snapshot(args.request.repo_id.clone())
+        .await
+        .map_err(|error| with_repo(error.into(), &args.request.repo_id))?;
+    let packet = state
+        .audits
+        .handoff_packet(&args.request.audit_id, &args.request.finding_ids)
+        .await?;
+    crate::remediation::validate_handoff_repository(&packet, &live.info)?;
+    state.remediation.start(args.request, packet).await
+}
+
+#[tauri::command]
+pub async fn list_remediations(
+    state: State<'_, AppState>,
+    args: ListRemediationsArgs,
+) -> Result<Vec<RemediationSession>, FrontendError> {
+    let snapshot = state
+        .backend
+        .get_repository_snapshot(args.repo_id.clone())
+        .await
+        .map_err(|error| with_repo(error.into(), &args.repo_id))?;
+    Ok(state
+        .remediation
+        .list_for_repository(
+            &args.repo_id,
+            &snapshot.info.worktree_root,
+            &snapshot.info.git_common_dir,
+            snapshot.generation,
+        )
+        .await)
+}
+
+#[tauri::command]
+pub async fn get_remediation_session(
+    state: State<'_, AppState>,
+    args: RemediationIdArgs,
+) -> Result<RemediationSession, FrontendError> {
+    state.remediation.get(&args.remediation_id).await
+}
+
+#[tauri::command]
+pub async fn stop_remediation(
+    state: State<'_, AppState>,
+    args: RemediationIdArgs,
+) -> Result<RemediationSession, FrontendError> {
+    state.remediation.stop(&args.remediation_id).await
+}
+
+#[tauri::command]
+pub async fn resume_remediation(
+    state: State<'_, AppState>,
+    args: ResumeRemediationArgs,
+) -> Result<RemediationSession, FrontendError> {
+    let snapshot = state
+        .backend
+        .get_repository_snapshot(args.repo_id.clone())
+        .await
+        .map_err(|error| with_repo(error.into(), &args.repo_id))?;
+    state
+        .remediation
+        .resume(
+            &args.remediation_id,
+            &args.repo_id,
+            &snapshot.info.worktree_root,
+            &snapshot.info.git_common_dir,
+        )
+        .await
+}
+
+#[tauri::command]
+pub async fn respond_remediation_request(
+    state: State<'_, AppState>,
+    args: RespondRemediationRequest,
+) -> Result<RemediationSession, FrontendError> {
+    state.remediation.respond(args).await
 }

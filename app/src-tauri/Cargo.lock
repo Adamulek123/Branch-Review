@@ -156,8 +156,10 @@ name = "branch-review"
 version = "0.3.1"
 dependencies = [
  "github_diff",
+ "hex",
  "serde",
  "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
@@ -165,6 +167,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "tokio",
+ "tokio-util",
  "uuid",
 ]
 
@@ -1123,6 +1126,7 @@ dependencies = [
 name = "github_diff"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "notify",
  "serde",
  "thiserror 2.0.19",
@@ -1130,6 +1134,7 @@ dependencies = [
  "tokio-util",
  "tracing",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

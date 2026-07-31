@@ -19,7 +19,13 @@ export const config: WebdriverIO.Config = {
     autoInstallTauriDriver: true,
     autoDownloadEdgeDriver: true,
     logLevel: "error",
-    env: { APPDATA: isolatedAppData, BRANCH_REVIEW_PROJECTS_PATH: isolatedProjects },
+    env: {
+      APPDATA: isolatedAppData,
+      BRANCH_REVIEW_PROJECTS_PATH: isolatedProjects,
+      BRANCH_REVIEW_AUDIT_MOCK: "1",
+      BRANCH_REVIEW_AUDIT_MOCK_FINDING: "1",
+      BRANCH_REVIEW_REMEDIATION_MOCK: "1",
+    },
     logDir: resolve("test-logs"),
     startTimeout: 90_000,
   }]],
@@ -29,5 +35,7 @@ export const config: WebdriverIO.Config = {
   } as unknown as WebdriverIO.Capabilities],
   framework: "mocha",
   reporters: ["spec"],
-  mochaOpts: { ui: "bdd", timeout: 120_000 },
+  // Windows WebView startup and first Monaco interaction can be slow on
+  // constrained CI hosts; individual UI waits remain tightly bounded.
+  mochaOpts: { ui: "bdd", timeout: 900_000 },
 };

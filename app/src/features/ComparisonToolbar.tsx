@@ -7,6 +7,7 @@ import {
   GitCompareArrows,
   RefreshCw,
   Search,
+  ShieldCheck,
   Sparkles,
   Workflow,
 } from "lucide-react";
@@ -25,6 +26,8 @@ interface Props {
   onReferences(left: string | null, right: string | null): void;
   onCompareUpstream(): void;
   onRefresh(): void;
+  onAudit?(): void;
+  auditEnabled?: boolean;
 }
 
 const modes: Array<{ id: ComparisonMode; detail: string }> = [
@@ -175,6 +178,10 @@ export function ComparisonToolbar(props: Props) {
       )}
 
       <div className="review-toolbar__actions">
+        <button className="audit-action" type="button" onClick={props.onAudit} disabled={!props.auditEnabled} title={props.auditEnabled ? "Audit this loaded comparison" : "Wait for the comparison to finish loading"}>
+          <ShieldCheck size={14} />
+          <span>Audit work</span>
+        </button>
         {upstream && (
           <button className="upstream-action" type="button" onClick={props.onCompareUpstream} title={`Compare ${shortRef(upstream.local.full_name)} with cached ${shortRef(upstream.upstream.full_name)}`}>
             <GitCompareArrows size={14} />

@@ -1,16 +1,21 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiffViewer } from "./DiffViewer";
 import type { ChangedFile, FileComparison, FileContent, FileId, ComparisonId, RepoId } from "../api/types";
 
-vi.mock("./MonacoDiff", () => ({
-  default: ({ original, modified }: { original: string; modified: string }) => (
-    <div data-testid="monaco-diff">
-      <span data-testid="original-content">{original}</span>
-      <span data-testid="modified-content">{modified}</span>
-    </div>
-  ),
-}));
+vi.mock("./MonacoDiff", () => {
+  function MockMonacoDiff({ original, modified, onLineCounts }: { original: string; modified: string; onLineCounts?(counts: { added: number; removed: number }): void }) {
+    useEffect(() => onLineCounts?.({ added: 12, removed: 4 }), [onLineCounts]);
+    return (
+      <div data-testid="monaco-diff">
+        <span data-testid="original-content">{original}</span>
+        <span data-testid="modified-content">{modified}</span>
+      </div>
+    );
+  }
+  return { default: MockMonacoDiff };
+});
 
 const contentCases: Array<[FileContent, string]> = [
   [{ kind: "binary", size: 42 }, "Binary file"],
@@ -90,6 +95,11 @@ describe("DiffViewer", () => {
     expect(await screen.findByTestId("original-content")).toBeEmptyDOMElement();
     expect(screen.getByTestId("modified-content")).toHaveTextContent("added contents");
     expect(screen.queryByText("Content unavailable")).not.toBeInTheDocument();
+  });
+  it("shows GitHub-style added and removed line counts beside the selected file", async () => {
+    render(<DiffViewer {...viewProps} comparison={comparison({ kind: "text", text: "content", encoding: "utf-8", size: 7 })} file={file} />);
+
+    expect(await screen.findByLabelText("12 lines added, 4 lines removed")).toHaveTextContent("+12−4");
   });
   it("renders a deleted text file against an empty modified side", async () => {
     const deleted = comparison({ kind: "text", text: "deleted contents\n", encoding: "utf-8", size: 17 });

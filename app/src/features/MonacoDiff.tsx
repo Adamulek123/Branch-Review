@@ -83,6 +83,18 @@ interface Props {
   wrapLines: boolean;
   ignoreTrimWhitespace: boolean;
   collapseUnchanged: boolean;
+  focusLine?: number | null;
+  onLineCounts?(counts: { added: number; removed: number }): void;
+}
+
+export function countChangedLines(changes: monaco.editor.ILineChange[] | null): { added: number; removed: number } {
+  return (changes ?? []).reduce(
+    (counts, change) => ({
+      added: counts.added + (change.modifiedEndLineNumber === 0 ? 0 : change.modifiedEndLineNumber - change.modifiedStartLineNumber + 1),
+      removed: counts.removed + (change.originalEndLineNumber === 0 ? 0 : change.originalEndLineNumber - change.originalStartLineNumber + 1),
+    }),
+    { added: 0, removed: 0 },
+  );
 }
 
 export default function MonacoDiff(props: Props) {
@@ -112,7 +124,7 @@ export default function MonacoDiff(props: Props) {
 
   return (
     <DiffEditor
-      key={`${props.fileId}:${encodedPath}`}
+      key={`${props.fileId}:${encodedPath}:${props.ignoreTrimWhitespace}`}
       original={props.original}
       modified={props.modified}
       language={props.language}
@@ -125,6 +137,19 @@ export default function MonacoDiff(props: Props) {
       theme={theme}
       onMount={(instance) => {
         instance.layout();
+        const reportLineCounts = () => props.onLineCounts?.(countChangedLines(instance.getLineChanges()));
+        reportLineCounts();
+        instance.onDidUpdateDiff(reportLineCounts);
+        if (props.focusLine) {
+          const editor = instance.getModifiedEditor();
+          const line = Math.max(1, Math.min(props.focusLine, editor.getModel()?.getLineCount() ?? 1));
+          editor.revealLineInCenter(line);
+          editor.setPosition({ lineNumber: line, column: 1 });
+          editor.deltaDecorations([], [{
+            range: new monaco.Range(line, 1, line, 1),
+            options: { isWholeLine: true, className: "audit-line-highlight" },
+          }]);
+        }
       }}
       options={{
         readOnly: true,

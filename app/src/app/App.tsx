@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import { AlertTriangle, Braces, Command, FolderGit2, FolderPlus, HelpCircle, LoaderCircle, PanelLeft, Plus, Settings2, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Bot, Braces, Command, FileDiff, FolderGit2, FolderPlus, HelpCircle, LoaderCircle, PanelLeft, Plus, ScanSearch, Settings2, ShieldCheck } from "lucide-react";
 import { backend, normalizeError } from "../api/backend";
 import { listenForRepositoryUpdates } from "../api/events";
 import { generations } from "../api/generations";
@@ -20,6 +20,10 @@ import { DiffViewer } from "../features/DiffViewer";
 import { RepositorySidebar, type RepositoryView } from "../features/RepositorySidebar";
 import { StatusBar } from "../features/StatusBar";
 import { UpdateDialog } from "../features/UpdateDialog";
+import { AuditSetupDialog } from "../features/audit/AuditSetupDialog";
+import { AuditWorkspace } from "../features/audit/AuditWorkspace";
+import { AgentWorkspace } from "../features/agent/AgentWorkspace";
+import { HandoffDialog, type HandoffSelection } from "../features/agent/HandoffDialog";
 import { CommandPalette, ShortcutHelp, commandIcons, type CommandAction } from "../features/CommandPalette";
 import { createComparisonRequest, filterFiles, findUpstreamComparison } from "../features/comparison-utils";
 import { useUpdater } from "./use-updater";
@@ -38,8 +42,13 @@ export default function App() {
   const [projectDialog, setProjectDialog] = useState<"create" | "rename" | null>(null);
   const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
   const [removeRepositoryId, setRemoveRepositoryId] = useState<string | null>(null);
+  const [closeRepositoryId, setCloseRepositoryId] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [updateOpen, setUpdateOpen] = useState(false);
+  const [featureView, setFeatureView] = useState<"changes" | "audit" | "agent">("changes");
+  const [auditSetupOpen, setAuditSetupOpen] = useState(false);
+  const [handoffSelection, setHandoffSelection] = useState<HandoffSelection | null>(null);
+  const [auditNavigation, setAuditNavigation] = useState<{ fileId: string; line: number } | null>(null);
   const updater = useUpdater();
   const [operationError, setOperationError] = useState<FrontendError | null>(null);
   const selectedPathRef = useRef<string | null>(null);
@@ -286,12 +295,12 @@ export default function App() {
     }
   }, [activeProject, cacheSnapshot, dispatch, saveProject]);
 
-  const closeRuntimeRepository = useCallback(async (projectRepoId: string) => {
+  const closeRuntimeRepository = useCallback(async (projectRepoId: string, allowActiveWork = false) => {
     if (!activeProject) return;
     const key = runtimeKey(activeProject.project_id, projectRepoId);
     const runtime = runtimeRef.current[key];
     if (runtime?.repoId) {
-      try { await backend.closeRepository(runtime.repoId); } catch { /* Already closed is equivalent. */ }
+      await backend.closeRepository(runtime.repoId, allowActiveWork);
       generations.remove(runtime.repoId);
       removeRepositoryQueries(runtime.repoId);
     }
@@ -302,7 +311,7 @@ export default function App() {
     if (!activeProject || !removeRepositoryId) return;
     try {
       setOperationError(null);
-      await closeRuntimeRepository(removeRepositoryId);
+      await closeRuntimeRepository(removeRepositoryId, true);
       const remaining = activeProject.repositories.filter((item) => item.project_repo_id !== removeRepositoryId).map((item, index) => ({ ...item, display_order: index }));
       await saveProject({ ...activeProject, repositories: remaining });
       if (ui.activeProjectRepoId === removeRepositoryId) dispatch({ type: "selectRepository", projectRepoId: remaining[0]?.project_repo_id ?? null });
@@ -316,15 +325,12 @@ export default function App() {
     if (projectId === activeProject?.project_id) return;
     try {
       setOperationError(null);
-      if (activeProject) {
-        for (const definition of activeProject.repositories) await closeRuntimeRepository(definition.project_repo_id);
-      }
       selectedPathRef.current = null;
       dispatch({ type: "selectProject", projectId });
     } catch (error) {
       setOperationError(normalizeError(error));
     }
-  }, [activeProject, closeRuntimeRepository, dispatch]);
+  }, [activeProject, dispatch]);
 
   const visibleFiles = useMemo(() => comparison ? filterFiles(comparison.files, ui.search, ui.statusFilters) : [], [comparison, ui.search, ui.statusFilters]);
   const selectFileAt = useCallback((index: number) => {
@@ -397,7 +403,7 @@ export default function App() {
     if (!activeProject) return;
     try {
       setOperationError(null);
-      for (const definition of activeProject.repositories) await closeRuntimeRepository(definition.project_repo_id);
+      for (const definition of activeProject.repositories) await closeRuntimeRepository(definition.project_repo_id, true);
       await backend.deleteProject(activeProject.project_id);
       queryClient.setQueryData<ProjectDefinition[]>(queryKeys.projects, (items = []) => items.filter((item) => item.project_id !== activeProject.project_id));
       dispatch({ type: "selectProject", projectId: null });
@@ -418,6 +424,7 @@ export default function App() {
       filePaneCollapsed={ui.filePaneCollapsed}
       hasPrevious={selectedVisibleIndex > 0}
       hasNext={selectedVisibleIndex >= 0 && selectedVisibleIndex < visibleFiles.length - 1}
+      focusLine={auditNavigation?.fileId === fileQuery.data?.file_id ? auditNavigation?.line ?? null : null}
       onView={(view) => dispatch({ type: "setDiffView", view })}
       onWrapLines={(enabled) => dispatch({ type: "setWrapLines", enabled })}
       onIgnoreTrimWhitespace={(enabled) => dispatch({ type: "setIgnoreTrimWhitespace", enabled })}
@@ -432,7 +439,7 @@ export default function App() {
     <div className="app-shell">
       <header className="title-bar">
         <div className="brand-mark"><span className="brand-mark__icon"><Braces size={15} /></span><span>Branch Review</span></div>
-        <div className="title-bar__context">{activeProject ? <><strong>{activeProject.name}</strong><ChevronSeparator /><span>{snapshot?.info.display_name ?? repositoryViews.find((item) => item.definition.project_repo_id === ui.activeProjectRepoId)?.definition.display_name ?? "No repository"}</span><span className="review-badge" title="Branch Review never changes repository content"><ShieldCheck size={12} /> Read-only review</span></> : <span>No project selected</span>}</div>
+        <div className="title-bar__context">{activeProject ? <><strong>{activeProject.name}</strong><ChevronSeparator /><span>{snapshot?.info.display_name ?? repositoryViews.find((item) => item.definition.project_repo_id === ui.activeProjectRepoId)?.definition.display_name ?? "No repository"}</span><span className={`review-badge ${featureView === "agent" ? "review-badge--write" : ""}`} title={featureView === "agent" ? "The remediation agent can edit ordinary workspace files" : "Changes and audit evidence are read-only"}>{featureView === "agent" ? <Bot size={12} /> : <ShieldCheck size={12} />} {featureView === "agent" ? "Agent workspace write" : "Read-only review"}</span></> : <span>No project selected</span>}</div>
         <button className="command-trigger" onClick={() => dispatch({ type: "setCommandPalette", open: true })}><Command size={14} /><span>Search commands</span><kbd>Ctrl K</kbd></button>
         <IconButton label="Add repository" shortcut="Ctrl+O" onClick={() => void addRepository()}><FolderPlus size={15} /></IconButton>
         <IconButton label="Keyboard shortcuts" shortcut="?" onClick={() => dispatch({ type: "setShortcutHelp", open: true })}><HelpCircle size={15} /></IconButton>
@@ -446,26 +453,34 @@ export default function App() {
         <main id="main-content" className="workspace">
           <PanelGroup direction="horizontal" onLayout={(sizes) => localStorage.setItem("branch-review:repo-size", String(sizes[0]))}>
             <Panel defaultSize={ui.repositoryPaneCollapsed ? 4 : savedPaneSize("branch-review:repo-size", 17)} minSize={ui.repositoryPaneCollapsed ? 4 : 13} maxSize={ui.repositoryPaneCollapsed ? 4 : 28}>
-              <RepositorySidebar projects={projects} activeProject={activeProject} activeProjectRepoId={ui.activeProjectRepoId} repositories={repositoryViews} collapsed={ui.repositoryPaneCollapsed} onProject={(id) => void selectProject(id)} onCreateProject={() => setProjectDialog("create")} onRenameProject={() => setProjectDialog("rename")} onDeleteProject={() => setDeleteProjectOpen(true)} onAddRepository={() => void addRepository()} onSelectRepository={(id) => dispatch({ type: "selectRepository", projectRepoId: id })} onRetryRepository={(id) => { const definition = activeProject?.repositories.find((item) => item.project_repo_id === id); if (activeProject && definition) void openDefinition(activeProject, definition, true); }} onCloseRepository={(id) => void closeRuntimeRepository(id)} onRemoveRepository={setRemoveRepositoryId} onToggleCollapsed={() => dispatch({ type: "toggleRepositoryPane" })} />
+              <RepositorySidebar projects={projects} activeProject={activeProject} activeProjectRepoId={ui.activeProjectRepoId} repositories={repositoryViews} collapsed={ui.repositoryPaneCollapsed} onProject={(id) => void selectProject(id)} onCreateProject={() => setProjectDialog("create")} onRenameProject={() => setProjectDialog("rename")} onDeleteProject={() => setDeleteProjectOpen(true)} onAddRepository={() => void addRepository()} onSelectRepository={(id) => dispatch({ type: "selectRepository", projectRepoId: id })} onRetryRepository={(id) => { const definition = activeProject?.repositories.find((item) => item.project_repo_id === id); if (activeProject && definition) void openDefinition(activeProject, definition, true); }} onCloseRepository={setCloseRepositoryId} onRemoveRepository={setRemoveRepositoryId} onToggleCollapsed={() => dispatch({ type: "toggleRepositoryPane" })} />
             </Panel>
             {!ui.repositoryPaneCollapsed && <PanelResizeHandle className="resize-handle" />}
             <Panel defaultSize={ui.repositoryPaneCollapsed ? 96 : 83} minSize={60}>
-              <div className="review-area">
-                {snapshot ? <ComparisonToolbar snapshot={snapshot} mode={ui.mode} leftFullRef={effectiveLeft} rightFullRef={effectiveRight} refreshing={refreshingRepoIds.has(snapshot.repo_id)} onMode={(mode) => void updateComparison(mode, effectiveLeft, effectiveRight)} onReferences={(left, right) => void updateComparison(ui.mode, left, right)} onCompareUpstream={() => { if (upstreamComparison) void updateComparison("direct", upstreamComparison.upstream.full_name, upstreamComparison.local.full_name); }} onRefresh={() => void refreshRepository(snapshot.repo_id)} /> : <div className="review-toolbar review-toolbar--disabled"><span>{activeRuntime?.opening ? "Opening repository…" : "Repository unavailable"}</span></div>}
+              <div className={`review-area review-area--${featureView}`}>
+                <nav className="feature-tabs" aria-label="Repository workspace">
+                  <button className={featureView === "changes" ? "is-active" : ""} aria-current={featureView === "changes" ? "page" : undefined} onClick={() => setFeatureView("changes")}><FileDiff size={14} />Changes</button>
+                  <button className={featureView === "audit" ? "is-active" : ""} aria-current={featureView === "audit" ? "page" : undefined} onClick={() => setFeatureView("audit")} disabled={!snapshot}><ScanSearch size={14} />Audit</button>
+                  <button className={featureView === "agent" ? "is-active" : ""} aria-current={featureView === "agent" ? "page" : undefined} onClick={() => setFeatureView("agent")} disabled={!snapshot}><Bot size={14} />Agent</button>
+                </nav>
+                {featureView === "changes" && (snapshot ? <ComparisonToolbar snapshot={snapshot} mode={ui.mode} leftFullRef={effectiveLeft} rightFullRef={effectiveRight} refreshing={refreshingRepoIds.has(snapshot.repo_id)} auditEnabled={Boolean(comparison && !comparisonQuery.isFetching)} onAudit={() => setAuditSetupOpen(true)} onMode={(mode) => void updateComparison(mode, effectiveLeft, effectiveRight)} onReferences={(left, right) => void updateComparison(ui.mode, left, right)} onCompareUpstream={() => { if (upstreamComparison) void updateComparison("direct", upstreamComparison.upstream.full_name, upstreamComparison.local.full_name); }} onRefresh={() => void refreshRepository(snapshot.repo_id)} /> : <div className="review-toolbar review-toolbar--disabled"><span>{activeRuntime?.opening ? "Opening repository…" : "Repository unavailable"}</span></div>)}
                 {operationError && <div className="operation-error"><InlineError error={operationError} /><IconButton label="Dismiss error" onClick={() => setOperationError(null)}><span aria-hidden="true">×</span></IconButton></div>}
-                {currentError ? <div className="repository-error"><InlineError error={currentError} onRetry={activeProject && ui.activeProjectRepoId ? () => { const definition = activeProject.repositories.find((item) => item.project_repo_id === ui.activeProjectRepoId); if (definition) void openDefinition(activeProject, definition, true); } : undefined} /></div> : !snapshot ? <EmptyState icon={FolderGit2} title={activeRuntime?.opening ? "Opening repository" : "Select a repository"} detail={activeRuntime?.opening ? "Reading references and working tree status." : "Choose an available repository from the left pane."} /> : (
+                {featureView !== "changes" && !snapshot && (currentError ? <div className="repository-error"><InlineError error={currentError} onRetry={activeProject && ui.activeProjectRepoId ? () => { const definition = activeProject.repositories.find((item) => item.project_repo_id === ui.activeProjectRepoId); if (definition) void openDefinition(activeProject, definition, true); } : undefined} /></div> : <EmptyState icon={FolderGit2} title={activeRuntime?.opening ? "Opening repository" : "Select a repository"} detail={activeRuntime?.opening ? "Reading references and working tree status." : "Choose an available repository from the left pane."} />)}
+                {featureView === "audit" && snapshot && <AuditWorkspace repoId={snapshot.repo_id} generation={snapshot.generation} onStart={() => comparison && setAuditSetupOpen(true)} onNavigate={(fileId, line) => { setAuditNavigation({ fileId, line }); dispatch({ type: "selectFile", fileId }); setFeatureView("changes"); }} onHandoff={(audit, findingIds) => setHandoffSelection({ audit, findingIds })} />}
+                {featureView === "agent" && snapshot && <AgentWorkspace repoId={snapshot.repo_id} generation={snapshot.generation} onReturnToChanges={() => setFeatureView("audit")} onReviewChanges={async () => { await refreshRepository(snapshot.repo_id); await updateComparison("all_uncommitted", null, null); setFeatureView("changes"); }} />}
+                {featureView === "changes" && (currentError ? <div className="repository-error"><InlineError error={currentError} onRetry={activeProject && ui.activeProjectRepoId ? () => { const definition = activeProject.repositories.find((item) => item.project_repo_id === ui.activeProjectRepoId); if (definition) void openDefinition(activeProject, definition, true); } : undefined} /></div> : !snapshot ? <EmptyState icon={FolderGit2} title={activeRuntime?.opening ? "Opening repository" : "Select a repository"} detail={activeRuntime?.opening ? "Reading references and working tree status." : "Choose an available repository from the left pane."} /> : (
                   ui.filePaneCollapsed ? (
                     comparisonQuery.error ? <InlineError error={normalizeError(comparisonQuery.error)} onRetry={() => void comparisonQuery.refetch()} /> : fileQuery.error ? <InlineError error={normalizeError(fileQuery.error)} onRetry={() => void fileQuery.refetch()} /> : diffViewer
                   ) : (
                     <PanelGroup direction="horizontal" onLayout={(sizes) => localStorage.setItem("branch-review:file-size", String(sizes[0]))}>
                       <Panel defaultSize={savedPaneSize("branch-review:file-size", 24)} minSize={20} maxSize={38}>
-                        <FileNavigator files={comparison?.files ?? []} search={ui.search} statusFilters={ui.statusFilters} activeFileId={ui.activeFileId} loading={comparisonQuery.isLoading || comparisonQuery.isFetching} view={ui.fileView} collapsedFolders={ui.collapsedFolders} onSearch={(search) => dispatch({ type: "setSearch", search })} onToggleStatus={(status) => dispatch({ type: "toggleStatus", status })} onView={(view) => dispatch({ type: "setFileView", view })} onToggleFolder={(path) => dispatch({ type: "toggleFolder", path })} onSelect={(fileId) => { const path = comparison?.files.find((file) => file.file_id === fileId)?.display_path ?? null; selectedPathRef.current = path; dispatch({ type: "selectFile", fileId }); }} />
+                        <FileNavigator files={comparison?.files ?? []} linesAdded={comparison?.totals.lines_added ?? 0} linesDeleted={comparison?.totals.lines_deleted ?? 0} search={ui.search} statusFilters={ui.statusFilters} activeFileId={ui.activeFileId} loading={comparisonQuery.isLoading || comparisonQuery.isFetching} view={ui.fileView} collapsedFolders={ui.collapsedFolders} onSearch={(search) => dispatch({ type: "setSearch", search })} onToggleStatus={(status) => dispatch({ type: "toggleStatus", status })} onView={(view) => dispatch({ type: "setFileView", view })} onToggleFolder={(path) => dispatch({ type: "toggleFolder", path })} onSelect={(fileId) => { const path = comparison?.files.find((file) => file.file_id === fileId)?.display_path ?? null; selectedPathRef.current = path; dispatch({ type: "selectFile", fileId }); }} />
                       </Panel>
                       <PanelResizeHandle className="resize-handle" />
                       <Panel defaultSize={76} minSize={48}>{comparisonQuery.error ? <InlineError error={normalizeError(comparisonQuery.error)} onRetry={() => void comparisonQuery.refetch()} /> : fileQuery.error ? <InlineError error={normalizeError(fileQuery.error)} onRetry={() => void fileQuery.refetch()} /> : diffViewer}</Panel>
                     </PanelGroup>
                   )
-                )}
+                ))}
               </div>
             </Panel>
           </PanelGroup>
@@ -474,10 +489,13 @@ export default function App() {
       <StatusBar capabilities={capabilitiesQuery.data ?? null} snapshot={snapshot} refreshing={snapshot ? refreshingRepoIds.has(snapshot.repo_id) : false} warning={watcherWarning} updateVersion={updater.state.status === "available" ? updater.state.version : null} onUpdate={() => setUpdateOpen(true)} />
       <NameDialog open={projectDialog !== null} title={projectDialog === "rename" ? "Rename project" : "Create project"} initialValue={projectDialog === "rename" ? activeProject?.name ?? "" : ""} submitLabel={projectDialog === "rename" ? "Rename" : "Create"} onClose={() => setProjectDialog(null)} onSubmit={projectDialog === "rename" ? renameProject : createProject} />
       <ConfirmDialog open={deleteProjectOpen} title="Delete project?" detail={`Remove “${activeProject?.name ?? "this project"}” and its saved repository list from Branch Review.`} confirmLabel="Delete project" onClose={() => setDeleteProjectOpen(false)} onConfirm={deleteActiveProject} />
-      <ConfirmDialog open={removeRepositoryId !== null} title="Remove repository from project?" detail="The repository will be closed in Branch Review and removed from this project." confirmLabel="Remove repository" onClose={() => setRemoveRepositoryId(null)} onConfirm={removeRepository} />
+      <ConfirmDialog open={removeRepositoryId !== null} title="Remove repository from project?" detail="The repository will be closed and removed from this project. Active audits keep running against immutable snapshots; an active agent may keep editing workspace files even after this repository disappears from the sidebar." confirmLabel="Remove repository and keep active work running" onClose={() => setRemoveRepositoryId(null)} onConfirm={removeRepository} />
+      <ConfirmDialog open={closeRepositoryId !== null} title="Close repository?" detail="Active audits keep running against immutable snapshots, and an active agent may keep editing the workspace. The live repository view will close until you reopen it." confirmLabel="Close repository" onClose={() => setCloseRepositoryId(null)} onConfirm={async () => { if (closeRepositoryId) await closeRuntimeRepository(closeRepositoryId, true); setCloseRepositoryId(null); }} />
       <CommandPalette open={ui.commandPaletteOpen} onClose={() => dispatch({ type: "setCommandPalette", open: false })} actions={commandActions} />
       <ShortcutHelp open={ui.shortcutHelpOpen} onClose={() => dispatch({ type: "setShortcutHelp", open: false })} />
       <DiagnosticsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} capabilities={capabilitiesQuery.data ?? null} />
+      {snapshot && comparison && <AuditSetupDialog open={auditSetupOpen} snapshot={snapshot} comparison={comparison} onClose={() => setAuditSetupOpen(false)} onStarted={() => { setAuditSetupOpen(false); setFeatureView("audit"); }} />}
+      {snapshot && <HandoffDialog open={handoffSelection !== null} repoId={snapshot.repo_id} generation={snapshot.generation} selection={handoffSelection} onClose={() => setHandoffSelection(null)} onStarted={() => { setHandoffSelection(null); setFeatureView("agent"); }} />}
       <UpdateDialog open={updateOpen} onClose={() => setUpdateOpen(false)} updater={updater.state} onCheck={() => void updater.checkForUpdates()} onInstall={() => void updater.installUpdate()} />
       <span className="sr-only" aria-live="polite">{comparison ? `${visibleFiles.length} changed files visible` : ""}</span>
     </div>
@@ -488,5 +506,30 @@ function StartupState() { return <div className="startup"><div className="startu
 function ChevronSeparator() { return <span className="context-separator" aria-hidden="true">/</span>; }
 function SetupFailure({ error, retry }: { error: FrontendError; retry(): void }) { return <main className="setup-failure"><AlertTriangle size={24} /><h1>Branch Review cannot start</h1><p>{error.message}</p><code>{error.code}</code><button className="button button--primary" onClick={retry}>Try again</button></main>; }
 function DiagnosticsDialog({ open, onClose, capabilities }: { open: boolean; onClose(): void; capabilities: BackendCapabilities | null }) {
-  return <Dialog open={open} onClose={onClose} title="Settings and diagnostics" description="Local, read-only runtime information." width="medium"><section className="diagnostics"><dl><div><dt>Backend API</dt><dd>{capabilities?.api_version ?? "—"}</dd></div><div><dt>Git</dt><dd>{capabilities?.git_version ?? "Unavailable"}</dd></div><div><dt>SHA-256 repositories</dt><dd>{capabilities?.supports_sha256 ? "Supported" : "Not reported"}</dd></div><div><dt>File display limit</dt><dd>{capabilities ? `${Math.round(capabilities.max_file_bytes / 1024 / 1024)} MB` : "—"}</dd></div></dl><p><PanelLeft size={14} /> Pane sizes and diff layout are stored only on this device.</p><p><FolderGit2 size={14} /> Repository content never leaves the local Tauri process.</p></section></Dialog>;
+  const [settings, setSettings] = useState<import("../api/types").AuditProviderSettings | null>(null);
+  const [secretPaths, setSecretPaths] = useState("");
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<FrontendError | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    void backend.getAuditProviderSettings().then((value) => {
+      setSettings(value);
+      setSecretPaths(value.secret_paths.join("\n"));
+    }).catch((value) => setError(normalizeError(value)));
+  }, [open]);
+  const testCodex = async () => {
+    try { setError(null); setMessage((await backend.testAuditProvider()).message); } catch (value) { setError(normalizeError(value)); }
+  };
+  const saveSecretPaths = async () => {
+    try {
+      setError(null);
+      const paths = secretPaths.split(/\r?\n/).map((path) => path.trim()).filter(Boolean);
+      await backend.setAuditSecretPaths(paths);
+      const value = await backend.getAuditProviderSettings();
+      setSettings(value);
+      setSecretPaths(value.secret_paths.join("\n"));
+      setMessage("Secret-path exclusions saved.");
+    } catch (value) { setError(normalizeError(value)); }
+  };
+  return <Dialog open={open} onClose={onClose} title="Settings and diagnostics" description="Local runtime and AI audit provider." width="medium"><section className="diagnostics"><dl><div><dt>Backend API</dt><dd>{capabilities?.api_version ?? "—"}</dd></div><div><dt>Git</dt><dd>{capabilities?.git_version ?? "Unavailable"}</dd></div><div><dt>SHA-256 repositories</dt><dd>{capabilities?.supports_sha256 ? "Supported" : "Not reported"}</dd></div><div><dt>File display limit</dt><dd>{capabilities ? `${Math.round(capabilities.max_file_bytes / 1024 / 1024)} MB` : "—"}</dd></div></dl><p><PanelLeft size={14} /> Pane sizes and diff layout are stored only on this device.</p><p><FolderGit2 size={14} /> Changes review stays local. AI Audit sends only selected, bounded code evidence through your signed-in Codex account.</p><div className="provider-settings"><header><strong>Codex audit</strong><span>{settings?.configured ? "Ready" : "Sign-in required"}</span></header>{error && <InlineError error={error} />}<p>{settings?.disclosure ?? "Checking the local Codex app-server…"}</p><div><button className="button button--primary" disabled={!settings?.configured} onClick={() => void testCodex()}>Test Codex</button></div><label className="field"><span>Additional secret paths</span><textarea name="secret_paths" autoComplete="off" spellCheck={false} rows={3} value={secretPaths} onChange={(event) => setSecretPaths(event.target.value)} placeholder={"config/private/\nsrc/generated-credentials.rs"} /><small>One normalized repository-relative file or directory per line. These paths are not materialized into audit bundles.</small></label><div><button className="button button--ghost" onClick={() => void saveSecretPaths()}>Save exclusions</button></div>{message && <p aria-live="polite"><ShieldCheck size={14} />{message}</p>}<small>Branch Review reuses the Codex CLI/app sign-in and never reads or stores your ChatGPT credentials.</small></div></section></Dialog>;
 }

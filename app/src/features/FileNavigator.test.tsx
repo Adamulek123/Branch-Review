@@ -19,9 +19,15 @@ const files = [
 afterEach(cleanup);
 
 describe("FileNavigator keyboard behavior", () => {
+  it("shows the aggregate added and removed line counts next to Changes", () => {
+    render(<FileNavigator files={files} linesAdded={42} linesDeleted={17} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={vi.fn()} />);
+
+    expect(screen.getByLabelText("42 lines added, 17 lines removed")).toHaveTextContent("+42−17");
+  });
+
   it("moves with arrows or J/K and opens the active item with Enter", () => {
     const onSelect = vi.fn();
-    render(<FileNavigator files={files} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={onSelect} />);
+    render(<FileNavigator files={files} linesAdded={42} linesDeleted={17} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={onSelect} />);
     const list = screen.getByLabelText("Changed file list");
 
     fireEvent.keyDown(list, { key: "ArrowDown" });
@@ -36,7 +42,7 @@ describe("FileNavigator keyboard behavior", () => {
   });
 
   it("dismisses the status filter outside and with Escape", () => {
-    render(<FileNavigator files={files} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={vi.fn()} />);
+    render(<FileNavigator files={files} linesAdded={42} linesDeleted={17} search="" statusFilters={[]} activeFileId={files[0].file_id} loading={false} view="list" collapsedFolders={[]} onSearch={vi.fn()} onToggleStatus={vi.fn()} onView={vi.fn()} onToggleFolder={vi.fn()} onSelect={vi.fn()} />);
     const trigger = screen.getByRole("button", { name: "Filter by status" });
 
     fireEvent.click(trigger);

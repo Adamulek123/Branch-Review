@@ -81,6 +81,7 @@ interface Props {
   filePaneCollapsed: boolean;
   hasPrevious: boolean;
   hasNext: boolean;
+  focusLine?: number | null;
   onView(view: DiffView): void;
   onWrapLines(enabled: boolean): void;
   onIgnoreTrimWhitespace(enabled: boolean): void;
@@ -92,10 +93,16 @@ interface Props {
 
 export function DiffViewer(props: Props) {
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lineCounts, setLineCounts] = useState<{ key: string; added: number; removed: number } | null>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   useDismissibleLayer({ open: settingsOpen, rootRef: settingsRef, triggerRef: settingsTriggerRef, onDismiss: closeSettings });
+  const lineCountKey = `${props.comparison?.file_id ?? ""}:${props.ignoreTrimWhitespace}`;
+  const handleLineCounts = useCallback(
+    (counts: { added: number; removed: number }) => setLineCounts({ key: lineCountKey, ...counts }),
+    [lineCountKey],
+  );
   const path = props.file?.display_path ?? null;
   if (props.loading) return <div className="diff-loading"><LoaderCircle className="spin" size={18} /><span>Loading file comparison</span></div>;
   if (!props.comparison || !path || !props.file) return <EmptyState icon={FileCode2} title="Choose a file to review" detail="Select a changed file to compare its previous and current content." />;
@@ -120,6 +127,12 @@ export function DiffViewer(props: Props) {
             <strong>{fileName}</strong>
           </div>
           {props.file.old_display_path && <span className="rename-context">from {props.file.old_display_path}</span>}
+          {textDiff && lineCounts?.key === lineCountKey && (
+            <span className="diff-line-counts" aria-label={`${lineCounts.added} lines added, ${lineCounts.removed} lines removed`}>
+              <strong>+{lineCounts.added}</strong>
+              <em>−{lineCounts.removed}</em>
+            </span>
+          )}
         </div>
 
         <div className="diff-header-actions">
@@ -169,6 +182,8 @@ export function DiffViewer(props: Props) {
                 wrapLines={props.wrapLines}
                 ignoreTrimWhitespace={props.ignoreTrimWhitespace}
                 collapseUnchanged={props.collapseUnchanged}
+                focusLine={props.focusLine}
+                onLineCounts={handleLineCounts}
               />
             </Suspense>
           </ErrorBoundary>

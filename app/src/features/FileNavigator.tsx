@@ -23,6 +23,8 @@ import { FileStatusIcon } from "./FileStatusIcon";
 
 interface Props {
   files: ChangedFile[];
+  linesAdded: number;
+  linesDeleted: number;
   search: string;
   statusFilters: string[];
   activeFileId: FileId | null;
@@ -136,7 +138,16 @@ export function FileNavigator(props: Props) {
       if (event.key === "Enter" && props.activeFileId) { event.preventDefault(); props.onSelect(props.activeFileId); }
     }}>
       <header className="file-navigator__header">
-        <div><strong>Changes</strong><span>{visibleFiles.length === props.files.length ? `${props.files.length} files` : `${visibleFiles.length} of ${props.files.length}`}</span></div>
+        <div>
+          <div className="file-navigator__title">
+            <strong>Changes</strong>
+            <span className="change-line-totals" aria-label={`${props.linesAdded} lines added, ${props.linesDeleted} lines removed`}>
+              <b>+{props.linesAdded}</b>
+              <i>−{props.linesDeleted}</i>
+            </span>
+          </div>
+          <span>{visibleFiles.length === props.files.length ? `${props.files.length} files` : `${visibleFiles.length} of ${props.files.length}`}</span>
+        </div>
         <div className="file-view-switcher" aria-label="File presentation">
           <button type="button" className={props.view === "tree" ? "is-active" : ""} onClick={() => props.onView("tree")} aria-label="Folder tree" aria-pressed={props.view === "tree"}><Files size={14} /></button>
           <button type="button" className={props.view === "list" ? "is-active" : ""} onClick={() => props.onView("list")} aria-label="Flat list" aria-pressed={props.view === "list"}><List size={14} /></button>

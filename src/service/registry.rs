@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+use futures_util::{StreamExt, TryStreamExt, stream};
 use tokio::sync::{Mutex, RwLock, Semaphore, broadcast};
 use tokio_util::sync::CancellationToken;
 
@@ -19,7 +20,8 @@ use crate::{
             read_worktree_file,
         },
         diff::{
-            DiffEndpoint, NameStatusEntry, comparison_plan, descriptor_for, parse_name_status_z,
+            DiffEndpoint, NameStatusEntry, comparison_plan, descriptor_for, numstat_args,
+            parse_name_status_z, parse_numstat_totals_z,
         },
         probe::probe_repository,
         refs::{FOR_EACH_REF_FORMAT, parse_for_each_ref},
@@ -33,6 +35,7 @@ use super::watcher::RepositoryWatcher;
 
 pub const METADATA_LIMIT: usize = 10 * 1024 * 1024;
 pub const FILE_LIMIT: u64 = 5 * 1024 * 1024;
+pub const AUDIT_BUNDLE_LIMIT: u64 = 100 * 1024 * 1024;
 const MAX_COMPARISONS: usize = 32;
 
 #[derive(Debug, Clone)]
@@ -44,6 +47,7 @@ pub struct RepositoryUpdate {
 struct CachedComparison {
     id: ComparisonId,
     generation: u64,
+    result: ComparisonResult,
     descriptors: HashMap<FileId, FileDescriptor>,
 }
 
@@ -414,6 +418,9 @@ impl RepositoryRegistry {
         } else {
             left.clone()
         };
+        let merge_base_oid = (mode == ComparisonMode::SinceMergeBase)
+            .then(|| content_left.clone())
+            .flatten();
 
         let status_paths = handle.status_paths.read().await.clone();
         let status_by_path: HashMap<_, _> = snapshot
@@ -422,19 +429,31 @@ impl RepositoryRegistry {
             .iter()
             .map(|status| (status.display_path.as_str(), status))
             .collect();
-        let mut entries = if left.is_none() && matches!(mode, ComparisonMode::AllUncommitted) {
-            status_as_name_entries(&snapshot.status, &status_paths)
-        } else {
-            let plan = comparison_plan(mode, left.as_deref(), right.as_deref())?;
-            let out = self
-                .run_git(
-                    Some(&snapshot.info.worktree_root),
-                    plan.args.iter().map(OsString::from),
-                    &handle.cancellation,
+        let (mut entries, mut lines_added, lines_deleted) =
+            if left.is_none() && matches!(mode, ComparisonMode::AllUncommitted) {
+                (
+                    status_as_name_entries(&snapshot.status, &status_paths),
+                    0,
+                    0,
                 )
-                .await?;
-            parse_name_status_z(&out.stdout)?
-        };
+            } else {
+                let plan = comparison_plan(mode, left.as_deref(), right.as_deref())?;
+                let line_args = numstat_args(&plan);
+                let (out, line_out) = tokio::try_join!(
+                    self.run_git(
+                        Some(&snapshot.info.worktree_root),
+                        plan.args.iter().map(OsString::from),
+                        &handle.cancellation,
+                    ),
+                    self.run_git(
+                        Some(&snapshot.info.worktree_root),
+                        line_args.iter().map(OsString::from),
+                        &handle.cancellation,
+                    ),
+                )?;
+                let (added, deleted) = parse_numstat_totals_z(&line_out.stdout)?;
+                (parse_name_status_z(&out.stdout)?, added, deleted)
+            };
         if mode == ComparisonMode::AllUncommitted && left.is_some() {
             append_untracked(&mut entries, &snapshot.status, &status_paths);
         }
@@ -465,6 +484,7 @@ impl RepositoryRegistry {
         let comparison_id = ComparisonId::new();
         let mut descriptors = HashMap::new();
         let mut files = Vec::with_capacity(entries.len());
+        let mut new_file_sources = Vec::new();
         for entry in entries {
             let mut descriptor = descriptor_for(
                 &entry,
@@ -487,6 +507,11 @@ impl RepositoryRegistry {
                     };
                 }
             }
+            if entry.kind == ChangeKind::Untracked
+                || (mode == ComparisonMode::AllUncommitted && left.is_none())
+            {
+                new_file_sources.push(descriptor.right.clone());
+            }
             files.push(ChangedFile {
                 file_id: file_id.clone(),
                 display_path: entry_display_path,
@@ -501,7 +526,28 @@ impl RepositoryRegistry {
             });
             descriptors.insert(file_id, descriptor);
         }
-        let totals = totals(&files);
+        if !new_file_sources.is_empty() {
+            let root = snapshot.info.worktree_root.clone();
+            let sides: Vec<FileSide> = stream::iter(new_file_sources)
+                .map(|source| self.load_side(&handle, &root, "New", source))
+                .buffer_unordered(8)
+                .try_collect()
+                .await?;
+            lines_added = lines_added.saturating_add(
+                sides
+                    .iter()
+                    .map(|side| match &side.content {
+                        FileContent::Text { text, .. } => text.lines().count(),
+                        FileContent::Symlink { .. } | FileContent::Submodule { .. } => 1,
+                        _ => 0,
+                    })
+                    .sum::<usize>(),
+            );
+        }
+        if handle.generation.load(Ordering::SeqCst) != generation {
+            return Err(AppError::StaleGeneration);
+        }
+        let totals = totals(&files, lines_added, lines_deleted);
         let result = ComparisonResult {
             comparison_id: comparison_id.clone(),
             repo_id: repo_id.clone(),
@@ -509,6 +555,9 @@ impl RepositoryRegistry {
             mode,
             resolved_left: left_summary,
             resolved_right: right_summary,
+            content_left_oid: content_left.clone(),
+            content_right_oid: right.clone(),
+            merge_base_oid,
             files,
             totals,
         };
@@ -516,12 +565,237 @@ impl RepositoryRegistry {
         cache.push_back(CachedComparison {
             id: comparison_id,
             generation,
+            result: result.clone(),
             descriptors,
         });
         while cache.len() > MAX_COMPARISONS {
             cache.pop_front();
         }
         Ok(result)
+    }
+
+    /// Freezes the exact comparison descriptors into an audit-owned capture.
+    ///
+    /// No path supplied by a provider reaches this method. Every file is loaded
+    /// through the descriptor already issued by `create_comparison`, and the
+    /// generation is checked before and after all reads.
+    pub async fn capture_comparison(
+        &self,
+        repo_id: &RepoId,
+        comparison_id: &ComparisonId,
+    ) -> Result<AuditCapture> {
+        self.capture_comparison_with_exclusions(repo_id, comparison_id, &[])
+            .await
+    }
+
+    pub async fn capture_comparison_with_exclusions(
+        &self,
+        repo_id: &RepoId,
+        comparison_id: &ComparisonId,
+        configured_secret_paths: &[String],
+    ) -> Result<AuditCapture> {
+        let handle = self.handle(repo_id).await?;
+        let generation = handle.generation.load(Ordering::SeqCst);
+        let (result, descriptors) = {
+            let cache = handle.comparisons.lock().await;
+            let comparison = cache
+                .iter()
+                .find(|item| &item.id == comparison_id)
+                .ok_or(AppError::InvalidComparisonId)?;
+            if comparison.generation != generation {
+                return Err(AppError::StaleGeneration);
+            }
+            (comparison.result.clone(), comparison.descriptors.clone())
+        };
+        let info = handle.info.read().await.clone();
+        let root = info.worktree_root.clone();
+        let git_common_dir_identity =
+            crate::repository_path_identity(&info.git_common_dir).map_err(AppError::Io)?;
+        let mut captured_with_size = stream::iter(result.files.iter().cloned().enumerate())
+            .map(|(index, file)| {
+                let handle = &handle;
+                let root = &root;
+                let descriptors = &descriptors;
+                async move {
+                    let descriptor = descriptors
+                        .get(&file.file_id)
+                        .cloned()
+                        .ok_or(AppError::InvalidFileId)?;
+                    let (left, right) =
+                        if audit_path_excluded(&file.display_path, configured_secret_paths)
+                            || file.old_display_path.as_deref().is_some_and(|path| {
+                                audit_path_excluded(path, configured_secret_paths)
+                            })
+                        {
+                            (
+                                FileSide {
+                                    label: "Left".into(),
+                                    source: FileSourceSummary::Empty,
+                                    content: FileContent::Missing,
+                                },
+                                FileSide {
+                                    label: "Right".into(),
+                                    source: FileSourceSummary::Empty,
+                                    content: FileContent::Missing,
+                                },
+                            )
+                        } else {
+                            tokio::try_join!(
+                                self.load_side(handle, root, "Left", descriptor.left),
+                                self.load_side(handle, root, "Right", descriptor.right),
+                            )?
+                        };
+                    let bytes = file_side_size(&left).saturating_add(file_side_size(&right));
+                    Ok::<_, AppError>((
+                        index,
+                        CapturedAuditFile {
+                            file_id: file.file_id.clone(),
+                            path: file.display_path.clone(),
+                            old_path: file.old_display_path.clone(),
+                            comparison: FileComparison {
+                                repo_id: repo_id.clone(),
+                                comparison_id: comparison_id.clone(),
+                                file_id: file.file_id,
+                                generation,
+                                left,
+                                right,
+                            },
+                        },
+                        bytes,
+                    ))
+                }
+            })
+            .buffer_unordered(4)
+            .try_collect::<Vec<_>>()
+            .await?;
+        captured_with_size.sort_by_key(|(index, _, _)| *index);
+        let bundle_bytes = captured_with_size
+            .iter()
+            .fold(0u64, |total, (_, _, bytes)| total.saturating_add(*bytes));
+        let captured = captured_with_size
+            .into_iter()
+            .map(|(_, captured, _)| captured)
+            .collect::<Vec<_>>();
+        let (context, context_bytes) = self
+            .capture_context_files(&handle, &root, &result, configured_secret_paths)
+            .await?;
+        let bundle_bytes = bundle_bytes.saturating_add(context_bytes);
+        if bundle_bytes > AUDIT_BUNDLE_LIMIT {
+            return Err(AppError::ContentTooLarge {
+                size: bundle_bytes,
+                limit: AUDIT_BUNDLE_LIMIT,
+            });
+        }
+        if handle.generation.load(Ordering::SeqCst) != generation {
+            return Err(AppError::ContentChangedDuringRead);
+        }
+        Ok(AuditCapture {
+            snapshot: AuditSnapshot {
+                repo_id: repo_id.clone(),
+                comparison_id: comparison_id.clone(),
+                generation,
+                mode: result.mode,
+                resolved_left: result.resolved_left,
+                resolved_right: result.resolved_right,
+                content_left_oid: result.content_left_oid,
+                content_right_oid: result.content_right_oid,
+                merge_base_oid: result.merge_base_oid,
+                changed_files: result.files,
+                instruction_hashes: Vec::new(),
+                bundle_bytes,
+            },
+            files: captured,
+            instructions: Vec::new(),
+            context,
+            worktree_root: root,
+            git_common_dir: info.git_common_dir,
+            git_common_dir_identity,
+        })
+    }
+
+    async fn capture_context_files(
+        &self,
+        handle: &Arc<RepositoryHandle>,
+        root: &Path,
+        comparison: &ComparisonResult,
+        configured_secret_paths: &[String],
+    ) -> Result<(Vec<CapturedContextFile>, u64)> {
+        let (args, source_kind): (Vec<OsString>, u8) = match comparison.mode {
+            ComparisonMode::Direct | ComparisonMode::SinceMergeBase => {
+                let oid = comparison
+                    .content_right_oid
+                    .as_deref()
+                    .ok_or(AppError::InvalidComparisonId)?;
+                (
+                    vec![
+                        OsString::from("ls-tree"),
+                        OsString::from("-r"),
+                        OsString::from("--name-only"),
+                        OsString::from("-z"),
+                        OsString::from(oid),
+                    ],
+                    0,
+                )
+            }
+            ComparisonMode::Staged => (vec![OsString::from("ls-files"), OsString::from("-z")], 1),
+            ComparisonMode::Unstaged | ComparisonMode::AllUncommitted => (
+                vec![
+                    OsString::from("ls-files"),
+                    OsString::from("-c"),
+                    OsString::from("-o"),
+                    OsString::from("--exclude-standard"),
+                    OsString::from("-z"),
+                ],
+                2,
+            ),
+        };
+        let output = self.run_git(Some(root), args, &handle.cancellation).await?;
+        let changed: HashSet<_> = comparison
+            .files
+            .iter()
+            .flat_map(|file| {
+                std::iter::once(file.display_path.as_str()).chain(file.old_display_path.as_deref())
+            })
+            .collect();
+        let mut seen = HashSet::new();
+        let mut captured = Vec::new();
+        let mut total = 0u64;
+        for raw in output
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|record| !record.is_empty())
+        {
+            let repo_path = repo_path_from_bytes(raw);
+            let display = repo_path.to_string_lossy().replace('\\', "/");
+            if !seen.insert(display.clone())
+                || changed.contains(display.as_str())
+                || audit_path_excluded(&display, configured_secret_paths)
+            {
+                continue;
+            }
+            let source = match source_kind {
+                0 => ContentSource::Commit {
+                    commit_oid: comparison.content_right_oid.clone().unwrap_or_default(),
+                    repo_path,
+                },
+                1 => ContentSource::Index { repo_path },
+                _ => ContentSource::Worktree { repo_path },
+            };
+            let side = self.load_side(handle, root, "Context", source).await?;
+            let size = file_side_size(&side);
+            total = total.saturating_add(size);
+            if total > AUDIT_BUNDLE_LIMIT {
+                return Err(AppError::ContentTooLarge {
+                    size: total,
+                    limit: AUDIT_BUNDLE_LIMIT,
+                });
+            }
+            captured.push(CapturedContextFile {
+                path: display,
+                content: side.content,
+            });
+        }
+        Ok((captured, total))
     }
 
     pub async fn get_file_comparison(
@@ -1031,6 +1305,56 @@ fn comparison_endpoints(
         ),
     }
 }
+
+fn file_side_size(side: &FileSide) -> u64 {
+    match &side.content {
+        FileContent::Text { size, .. }
+        | FileContent::Binary { size }
+        | FileContent::TooLarge { size, .. }
+        | FileContent::UnsupportedEncoding { size } => *size,
+        FileContent::Symlink { target } => target.len() as u64,
+        FileContent::Submodule { commit_oid } => {
+            commit_oid.as_ref().map_or(0, |value| value.len() as u64)
+        }
+        FileContent::Missing => 0,
+    }
+}
+
+fn audit_path_excluded(path: &str, configured_secret_paths: &[String]) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    let excluded_component = normalized.split('/').any(|component| {
+        matches!(
+            component,
+            ".git"
+                | "node_modules"
+                | "target"
+                | "dist"
+                | "build"
+                | ".next"
+                | "vendor"
+                | "coverage"
+                | "__pycache__"
+        )
+    });
+    let configured = configured_secret_paths.iter().any(|secret| {
+        let secret = secret
+            .replace('\\', "/")
+            .trim_matches('/')
+            .to_ascii_lowercase();
+        !secret.is_empty()
+            && (normalized == secret || normalized.starts_with(&format!("{secret}/")))
+    });
+    excluded_component
+        || configured
+        || normalized.ends_with(".pem")
+        || normalized.ends_with(".key")
+        || normalized.ends_with(".p12")
+        || normalized.ends_with(".pfx")
+        || normalized.ends_with(".env")
+        || normalized.contains("credentials")
+        || normalized.contains("id_rsa")
+        || normalized.contains("id_ed25519")
+}
 fn status_as_name_entries(
     status: &WorkingTreeStatus,
     paths: &HashMap<FileId, PathBuf>,
@@ -1091,9 +1415,11 @@ fn path_bytes(path: &Path) -> Vec<u8> {
 fn path_bytes(path: &Path) -> Vec<u8> {
     path.to_string_lossy().as_bytes().to_vec()
 }
-fn totals(files: &[ChangedFile]) -> ChangeTotals {
+fn totals(files: &[ChangedFile], lines_added: usize, lines_deleted: usize) -> ChangeTotals {
     let mut t = ChangeTotals {
         files: files.len(),
+        lines_added,
+        lines_deleted,
         ..Default::default()
     };
     for f in files {
@@ -1135,11 +1461,16 @@ mod tests {
             submodule: false,
             similarity: None,
         };
-        let t = totals(&[
-            file(ChangeKind::Added),
-            file(ChangeKind::Deleted),
-            file(ChangeKind::Modified),
-        ]);
+        let t = totals(
+            &[
+                file(ChangeKind::Added),
+                file(ChangeKind::Deleted),
+                file(ChangeKind::Modified),
+            ],
+            12,
+            4,
+        );
         assert_eq!((t.files, t.added, t.deleted, t.modified), (3, 1, 1, 1));
+        assert_eq!((t.lines_added, t.lines_deleted), (12, 4));
     }
 }

@@ -1,9 +1,11 @@
+mod audit;
 mod comparison;
 mod content;
 mod project;
 mod reference;
 mod repository;
 mod status;
+pub use audit::*;
 pub use comparison::*;
 pub use content::*;
 pub use project::*;

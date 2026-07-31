@@ -21,6 +21,50 @@ pub struct DiffPlan {
     pub right: DiffEndpoint,
 }
 
+pub fn numstat_args(plan: &DiffPlan) -> Vec<String> {
+    plan.args
+        .iter()
+        .map(|arg| {
+            if arg == "--name-status" {
+                "--numstat".to_owned()
+            } else {
+                arg.clone()
+            }
+        })
+        .collect()
+}
+
+pub fn parse_numstat_totals_z(output: &[u8]) -> Result<(usize, usize)> {
+    let mut added = 0usize;
+    let mut deleted = 0usize;
+    for record in output
+        .split(|byte| *byte == 0)
+        .filter(|record| !record.is_empty())
+    {
+        let mut fields = record.splitn(3, |byte| *byte == b'\t');
+        let (Some(raw_added), Some(raw_deleted), Some(_path)) =
+            (fields.next(), fields.next(), fields.next())
+        else {
+            // Rename/copy records can carry their paths in the following NUL
+            // fields. Those path-only fields do not contain line counts.
+            continue;
+        };
+        added = added.saturating_add(parse_numstat_count(raw_added)?);
+        deleted = deleted.saturating_add(parse_numstat_count(raw_deleted)?);
+    }
+    Ok((added, deleted))
+}
+
+fn parse_numstat_count(value: &[u8]) -> Result<usize> {
+    if value == b"-" {
+        return Ok(0);
+    }
+    std::str::from_utf8(value)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .ok_or_else(|| malformed("invalid numstat count"))
+}
+
 /// Produces the complete, closed set of supported comparison command lines.
 pub fn comparison_plan(
     mode: ComparisonMode,
@@ -250,6 +294,11 @@ mod tests {
     #[test]
     fn rejects_truncation() {
         assert!(parse_name_status_z(b"R100\0old\0").is_err());
+    }
+    #[test]
+    fn parses_numstat_totals_and_ignores_binary_entries() {
+        let totals = parse_numstat_totals_z(b"12\t4\tsrc/main.rs\0-\t-\tasset.bin\0").unwrap();
+        assert_eq!(totals, (12, 4));
     }
     #[test]
     fn plans_all_modes() {

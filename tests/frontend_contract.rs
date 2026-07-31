@@ -1,6 +1,8 @@
 use github_diff::{
-    ComparisonRequest, ComparisonResult, FileComparison, FileContent, FileSourceSummary,
-    FrontendError, HeadState, ProjectDefinition, RepositorySnapshot,
+    AuditActivity, AuditCoverage, AuditDepth, AuditFreshness, AuditId, AuditRequest, AuditSession,
+    AuditStatus, AuditUsage, ComparisonId, ComparisonRequest, ComparisonResult, FileComparison,
+    FileContent, FileSourceSummary, FrontendError, HeadState, ProjectDefinition, RepoId,
+    RepositorySnapshot,
 };
 use serde::Deserialize;
 
@@ -15,6 +17,40 @@ struct ContractFixture {
     file_comparison: FileComparison,
     project: ProjectDefinition,
     error: FrontendError,
+}
+
+#[test]
+fn audit_contract_round_trips_with_stable_snake_case_enums() {
+    let session = AuditSession {
+        schema_version: 1,
+        audit_id: AuditId("audit-1".into()),
+        repo_id: RepoId("repo-1".into()),
+        request: AuditRequest {
+            repo_id: RepoId("repo-1".into()),
+            comparison_id: ComparisonId("comparison-1".into()),
+            work_description: "Preserve behavior".into(),
+            acceptance_criteria: "No regression".into(),
+            additional_context: String::new(),
+            depth: AuditDepth::Thorough,
+        },
+        snapshot: None,
+        status: AuditStatus::Incomplete,
+        freshness: AuditFreshness::RepositoryChanged,
+        activity: AuditActivity::default(),
+        coverage: AuditCoverage::default(),
+        findings: Vec::new(),
+        conclusion: None,
+        usage: AuditUsage::default(),
+        created_at_ms: 1,
+        updated_at_ms: 2,
+        error: None,
+    };
+    let value = serde_json::to_value(&session).unwrap();
+    assert_eq!(value["request"]["depth"], "thorough");
+    assert_eq!(value["status"], "incomplete");
+    assert_eq!(value["freshness"], "repository_changed");
+    let decoded: AuditSession = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.audit_id.0, "audit-1");
 }
 
 #[test]

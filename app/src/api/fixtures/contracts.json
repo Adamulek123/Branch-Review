@@ -44,7 +44,7 @@
     "comparison_id": "comparison-1", "repo_id": "repo-1", "generation": 4, "mode": "all_uncommitted",
     "resolved_left": null, "resolved_right": null,
     "files": [{ "file_id": "file-1", "display_path": "src/main.rs", "old_display_path": null, "status": "modified", "staged": false, "unstaged": true, "conflicted": false, "submodule": false, "similarity": null }],
-    "totals": { "files": 1, "added": 0, "modified": 1, "deleted": 0, "renamed": 0, "conflicted": 0 }
+    "totals": { "files": 1, "added": 0, "modified": 1, "deleted": 0, "renamed": 0, "conflicted": 0, "lines_added": 1, "lines_deleted": 1 }
   },
   "file_comparison": {
     "repo_id": "repo-1", "comparison_id": "comparison-1", "file_id": "file-1", "generation": 4,

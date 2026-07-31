@@ -92,6 +92,62 @@ async fn opens_from_nested_directory_and_close_invalidates_every_operation() {
 }
 
 #[tokio::test]
+async fn audit_capture_materializes_changed_and_unchanged_context_once() {
+    let repo = init();
+    write(
+        repo.path(),
+        "src/changed.rs",
+        "pub fn value() -> u8 { 1 }\n",
+    );
+    write(repo.path(), "src/context.rs", "pub const LIMIT: u8 = 3;\n");
+    write(repo.path(), ".gitignore", "ignored/\ntarget/\n");
+    commit_all(repo.path(), "initial");
+    write(
+        repo.path(),
+        "src/changed.rs",
+        "pub fn value() -> u8 { 2 }\n",
+    );
+    write(
+        repo.path(),
+        "ignored/secret.txt",
+        "password=do-not-capture\n",
+    );
+
+    let registry = RepositoryRegistry::system();
+    let snapshot = registry.open_repository(repo.path()).await.unwrap();
+    let comparison = registry
+        .create_comparison(&snapshot.repo_id, ComparisonRequest::AllUncommitted)
+        .await
+        .unwrap();
+    let capture = registry
+        .capture_comparison(&snapshot.repo_id, &comparison.comparison_id)
+        .await
+        .unwrap();
+    assert_eq!(capture.snapshot.generation, comparison.generation);
+    assert!(
+        capture
+            .files
+            .iter()
+            .any(|file| file.path == "src/changed.rs")
+    );
+    let context = capture
+        .context
+        .iter()
+        .find(|file| file.path == "src/context.rs")
+        .expect("unchanged tracked context must be materialized");
+    assert_eq!(text(&context.content), Some("pub const LIMIT: u8 = 3;\n"));
+    assert!(
+        !capture
+            .context
+            .iter()
+            .any(|file| file.path.starts_with("ignored/"))
+    );
+
+    write(repo.path(), "src/context.rs", "pub const LIMIT: u8 = 99;\n");
+    assert_eq!(text(&context.content), Some("pub const LIMIT: u8 = 3;\n"));
+}
+
+#[tokio::test]
 async fn direct_and_merge_base_comparisons_have_different_semantics() {
     let repo = init();
     write(repo.path(), "base.txt", "base\n");
@@ -151,6 +207,17 @@ async fn direct_and_merge_base_comparisons_have_different_semantics() {
     assert_eq!(since_base.files.len(), 1);
     assert_eq!(since_base.files[0].display_path, "main.txt");
     assert_eq!(since_base.files[0].status, ChangeKind::Added);
+    assert_eq!(direct.merge_base_oid, None);
+    assert_eq!(
+        direct.content_left_oid.as_deref(),
+        Some(feature.commit_oid.as_str())
+    );
+    assert_eq!(
+        direct.content_right_oid.as_deref(),
+        Some(main.commit_oid.as_str())
+    );
+    assert!(since_base.merge_base_oid.is_some());
+    assert_eq!(since_base.content_left_oid, since_base.merge_base_oid);
 }
 
 #[tokio::test]
@@ -203,6 +270,15 @@ async fn reports_staged_unstaged_untracked_and_all_uncommitted() {
         .create_comparison(&snapshot.repo_id, ComparisonRequest::AllUncommitted)
         .await
         .unwrap();
+    assert_eq!(
+        (staged.totals.lines_added, staged.totals.lines_deleted),
+        (2, 2)
+    );
+    assert_eq!(
+        (unstaged.totals.lines_added, unstaged.totals.lines_deleted),
+        (2, 2)
+    );
+    assert_eq!((all.totals.lines_added, all.totals.lines_deleted), (4, 3));
     assert_eq!(
         staged
             .files

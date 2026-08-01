@@ -154,6 +154,15 @@ pub async fn close_repository(
     args: RepoArgs,
 ) -> Result<(), FrontendError> {
     let repo_id = args.repo_id;
+    if state.audits.has_preparing(&repo_id.0).await {
+        return Err(FrontendError {
+            code: github_diff::ErrorCode::Io,
+            message: "Wait for the audit snapshot to finish before closing this repository.".into(),
+            retryable: false,
+            repo_id: Some(repo_id.0.clone()),
+            operation_id: None,
+        });
+    }
     if (state.audits.has_active(&repo_id.0).await || state.remediation.has_active(&repo_id.0).await)
         && !args.allow_active_work
     {

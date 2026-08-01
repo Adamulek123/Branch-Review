@@ -163,8 +163,8 @@ export function AuditSetupDialog({
               <div><dt>Excluded</dt><dd>.git, ignored files, dependencies/build output, credential/private-key paths{settings?.secret_paths.length ? `, configured: ${settings.secret_paths.join(", ")}` : ""}</dd></div>
             </dl>
             <p><Gauge size={14} /> Hard bundle cap 100 MiB; individual files 5 MiB; binary and generated/dependency content excluded.</p>
-            <p><AlertTriangle size={14} /> Credential paths and likely secrets are excluded or redacted. Heuristic redaction cannot guarantee detection of every secret.</p>
-            <p className="audit-scope__cloud"><Cloud size={14} /> Selected code evidence is reviewed through your signed-in Codex account. ChatGPT plan limits and workspace data controls apply.</p>
+            <p><AlertTriangle size={14} /> Path rules exclude likely credential files, but inline secrets in ordinary source files may not be detected. Add sensitive files or directories to Settings before starting.</p>
+            <p className="audit-scope__cloud"><Cloud size={14} /> Changed files plus bounded, unchanged tracked or unignored repository text may be reviewed through your signed-in Codex account. ChatGPT plan limits and workspace data controls apply.</p>
           </section>
           <footer className="audit-setup__actions">
             <button type="button" className="button button--ghost" onClick={requestClose}>Cancel</button>

@@ -1,14 +1,16 @@
 # Branch Review desktop application
 
-Branch Review is a dark, compact Tauri 2 desktop UI over the repository’s read-only Rust backend. It supports saved projects, multiple concurrently open repositories, working-tree and branch comparisons, live watcher invalidation, keyboard navigation, and typed handling for text, binary, oversized, missing, symlink, submodule, and unsupported-encoding content.
+Branch Review is a dark, compact Tauri 2 desktop UI over the repository’s read-only comparison backend. It supports saved projects, multiple concurrently open repositories, working-tree and branch comparisons, AI-assisted audit, opt-in remediation, live watcher invalidation, keyboard navigation, and typed handling for text, binary, oversized, missing, symlink, submodule, and unsupported-encoding content.
 
 ## Security and data boundaries
 
-- The app runs entirely locally and performs no network operations.
+- Comparison stays local. AI Audit sends a bounded snapshot through the user's signed-in Codex account; changed files and unchanged tracked or unignored repository context can be included.
+- Audit path exclusions omit matching files and directories from the snapshot. Heuristic path filtering cannot guarantee detection of inline secrets in ordinary source files.
+- Remediation is opt-in and runs Codex with repository-scoped workspace write access, network disabled, and Git metadata protected.
 - Git operations are restricted by the backend’s closed set of read-only commands.
 - The renderer has no filesystem or shell permissions. The folder picker is a Rust command.
-- The main capability grants only Tauri core defaults and event listen/unlisten.
-- Projects are schema-versioned in the OS application config directory. Runtime repository IDs, generations, comparison IDs, file IDs, results, and file bodies are never persisted.
+- The main capability grants Tauri core/event access plus updater and process-restart permissions; it grants no filesystem or shell capability.
+- Projects and minimal remediation thread mappings are stored in the OS application config directory. Private audit bundles are stored in the application cache until deletion or the next startup; Codex owns remediation transcripts.
 - Monaco is loaded from the packaged application only when text content is selected; no CDN is used.
 
 ## Development

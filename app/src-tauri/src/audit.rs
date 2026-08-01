@@ -292,6 +292,13 @@ impl AuditService {
             .any(|session| session.status.is_active())
     }
 
+    pub async fn has_preparing(&self, repo_id: &str) -> bool {
+        self.list(repo_id)
+            .await
+            .iter()
+            .any(|session| session.status == AuditStatus::Preparing)
+    }
+
     pub async fn get(&self, audit_id: &AuditId) -> Result<AuditSession, FrontendError> {
         let handle = self.handle(audit_id).await?;
         let (mut session, captured_generation) = {
@@ -626,7 +633,7 @@ impl AuditService {
         if capture.snapshot.bundle_bytes > BUNDLE_CAP {
             return Err("The immutable audit bundle exceeds the 100 MiB hard limit".into());
         }
-        capture.instructions = capture_instructions(&capture);
+        capture.instructions = capture_instructions(&capture, &secret_paths);
         capture.snapshot.bundle_bytes = capture.snapshot.bundle_bytes.saturating_add(
             capture
                 .instructions
@@ -1206,7 +1213,10 @@ fn redact(value: &str) -> (String, bool) {
     (lines, changed)
 }
 
-fn capture_instructions(capture: &AuditCapture) -> Vec<github_diff::CapturedInstruction> {
+fn capture_instructions(
+    capture: &AuditCapture,
+    configured_secret_paths: &[String],
+) -> Vec<github_diff::CapturedInstruction> {
     let root = match std::fs::canonicalize(&capture.worktree_root) {
         Ok(root) => root,
         Err(_) => return Vec::new(),
@@ -1230,6 +1240,10 @@ fn capture_instructions(capture: &AuditCapture) -> Vec<github_diff::CapturedInst
                 .components()
                 .any(|part| !matches!(part, Component::Normal(_)))
         {
+            continue;
+        }
+        let display = relative.to_string_lossy().replace('\\', "/");
+        if configured_secret_path_matches(&display, configured_secret_paths) {
             continue;
         }
         let path = root.join(&relative);
@@ -1256,7 +1270,6 @@ fn capture_instructions(capture: &AuditCapture) -> Vec<github_diff::CapturedInst
             break;
         }
         total += content.len();
-        let display = relative.to_string_lossy().replace('\\', "/");
         captured.push(github_diff::CapturedInstruction {
             path: display,
             sha256: sha256(&content),
@@ -1265,6 +1278,18 @@ fn capture_instructions(capture: &AuditCapture) -> Vec<github_diff::CapturedInst
     }
     captured.sort_by(|left, right| left.path.cmp(&right.path));
     captured
+}
+
+fn configured_secret_path_matches(path: &str, configured_secret_paths: &[String]) -> bool {
+    let normalized = path.replace('\\', "/").to_ascii_lowercase();
+    configured_secret_paths.iter().any(|secret| {
+        let secret = secret
+            .replace('\\', "/")
+            .trim_matches('/')
+            .to_ascii_lowercase();
+        !secret.is_empty()
+            && (normalized == secret || normalized.starts_with(&format!("{secret}/")))
+    })
 }
 
 fn required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
@@ -1795,6 +1820,28 @@ mod tests {
         assert!(redacted);
         assert!(!value.contains("secret"));
         assert!(value.contains("safe=true"));
+    }
+
+    #[test]
+    fn configured_secret_paths_cover_instruction_files() {
+        let configured = vec!["AGENTS.md".into(), ".github".into()];
+        assert!(configured_secret_path_matches("AGENTS.md", &configured));
+        assert!(configured_secret_path_matches(
+            ".github/copilot-instructions.md",
+            &configured
+        ));
+        assert!(configured_secret_path_matches(
+            ".GITHUB/nested/AGENTS.md",
+            &configured
+        ));
+        assert!(!configured_secret_path_matches(
+            "src/AGENTS.md",
+            &configured
+        ));
+        assert!(!configured_secret_path_matches(
+            ".github-actions/config.yml",
+            &configured
+        ));
     }
 
     #[test]

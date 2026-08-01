@@ -1,6 +1,6 @@
 # Branch Review
 
-Branch Review is a local, read-only Windows desktop application for reviewing branches and working-tree changes across multiple Git repositories. The repository also contains the reusable `github_diff` Rust backend. It uses the installed `git` executable as the source of truth and never checks out branches or runs network or mutating Git commands.
+Branch Review is a Windows desktop application for reviewing branches and working-tree changes across multiple Git repositories. Its comparison and audit-capture paths are read-only; an explicitly started remediation agent can edit ordinary workspace files under a repository-scoped sandbox. The repository also contains the reusable `github_diff` Rust backend. Git inspection uses a closed set of read-only commands and never checks out branches or mutates Git references.
 
 The finished desktop application lives in [`app/`](app/README.md). Its Tauri 2 shell owns one long-lived backend, while the React renderer provides a dense three-pane review workspace, saved projects, live watcher refresh, virtualized changed files, and lazy Monaco split/unified diffs.
 
